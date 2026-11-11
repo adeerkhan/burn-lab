@@ -81,16 +81,55 @@ directions.
 
 The vision path is ported module for module. At this scale the **direct-patch
 baseline beats the faithful encoder**, 86.5% against 73.5% — the same outcome the
-reference reports (189/200 against 119/200). The 25.7M pilot learns the digit task
-through a saturated coding model but needs 200 steps, not the reference's 40.
+reference reports (189/200 against 119/200). At the smoke-test size the ordering
+flips (faithful 47.0% against 40.0%), so the faithful tower is the slower learner,
+not the weaker one. The 25.7M pilot learns the digit task through a saturated coding
+model but needs 200 steps, not the reference's 40.
 
 ![Data diversity and curriculum ordering](docs/experiments.webp)
 
-Two matched studies over an arithmetic corpus, three paired seeds each. More unique
-structures trend better (+2.0 points, 95% CI +0.5 to +3.9) and blocked ordering is
-clearly worst (−10.3 points), both in the reference's direction — but with three
-seeds the Holm-corrected p-values are 0.50, so neither is confirmed. Exact-expression
-accuracy was 0% throughout.
+Two matched studies over an arithmetic corpus, **ten paired seeds** each. 32
+structures beat 8 by +3.8 points (Holm p = 0.008) and blocked ordering loses 9.3
+points (Holm p = 0.004) — both survive correction. 88 structures is not separable
+from 8, so the gain is not monotonic in diversity. Exact-expression accuracy was 0%
+throughout.
+
+## RL variant screen and group-size confirmation
+
+Eight arms from one checkpoint, one design choice changed at a time, 16 groups x 8
+rollouts each, scored on 32 dev tasks:
+
+| Arm | Groups with signal | Exact rollouts | Dev pass@1 |
+| --- | --- | --- | --- |
+| baseline (binary, -0.1, T=0.35, group 8) | 4/16 | 100/128 | 0.906 |
+| partial-test reward | 4/16 | 100/128 | 0.906 |
+| invalid penalty 0 | 1/16 | 100/128 | 0.906 |
+| invalid penalty -1 | 3/16 | 100/128 | **0.938** |
+| temperature 0.20 | 2/16 | 104/128 | **0.938** |
+| temperature 0.80 | 1/16 | 0/128 | 0.906 |
+| group size 4 | 2/16 | 50/64 | 0.906 |
+| group size 16 | 4/16 | 200/256 | 0.906 |
+
+The group arms see 64 and 256 rollouts respectively for the same 16 prompts, so
+their exact counts are not comparable to the group-8 arms' 128.
+
+Exact McNemar over paired dev tasks puts every arm at Holm p = 1.00: two arms move
+one task, and one task out of 32 is noise. That is the same wall as before — the
+policy sits above the capability band, so there is almost nothing for a design
+choice to change.
+
+**Group-size confirmation.** Group 4 against group 8 over three seeds and 12 groups
+each:
+
+| Seed | Group 4 | Group 8 | Difference | McNemar p |
+| --- | --- | --- | --- | --- |
+| 11 | 0.938 | 0.906 | -0.031 | 1.000 |
+| 22 | 0.906 | 0.938 | +0.031 | 1.000 |
+| 33 | 0.906 | 0.906 | 0.000 | 1.000 |
+
+Seed mean +0.000, task-level 95% CI -0.031 to +0.031. Group 4 won one seed, lost
+one and tied one — which is exactly the reference's own conclusion when its dev
+winner failed to replicate.
 
 ### Why our result differs from the reference's
 

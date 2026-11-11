@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "per_seed": [
+    {
+      "seed": 11,
+      "smaller": 0.9375,
+      "larger": 0.90625,
+      "difference": -0.03125,
+      "mcnemar_p": 1.0
+    },
+    {
+      "seed": 22,
+      "smaller": 0.90625,
+      "larger": 0.9375,
+      "difference": 0.03125,
+      "mcnemar_p": 1.0
+    },
+    {
+      "seed": 33,
+      "smaller": 0.90625,
+      "larger": 0.90625,
+      "difference": 0.0,
+      "mcnemar_p": 1.0
+    }
+  ],
+  "seed_mean_difference": 0.0,
+  "task_ci_low": -0.03125,
+  "task_ci_high": 0.03125,
+  "task_mean_difference": 0.0,
+  "note": "group 8 minus group 4. Per-seed McNemar over paired dev tasks; the interval resamples tasks after averaging within a task across seeds."
+}

@@ -169,24 +169,56 @@ presentation changing.
 
 ![Data diversity and curriculum ordering](../docs/experiments.webp)
 
+Ten paired seeds, 200 steps, batch 24:
+
 | Study | Result |
 | --- | --- |
-| Data diversity, 8 to 88 structures | +2.0 points (95% CI +0.5 to +3.9), permutation p = 0.25, Holm p = 0.50 |
-| Blocked vs interleaved ordering | -10.3 points for blocked (95% CI -16.0 to -3.9), p = 0.25, Holm p = 0.50 |
+| Data diversity, 32 vs 8 structures | +3.8 points (95% CI +1.9 to +6.3), permutation p = 0.0039, Holm p = 0.0078 |
+| Data diversity, 88 vs 8 structures | +1.7 points (95% CI -1.0 to +4.4), Holm p = 0.30 |
+| Blocked vs curriculum ordering | -9.3 points (95% CI -11.4 to -7.0), p = 0.0020, Holm p = 0.0039 |
+| Interleaved vs curriculum | -1.6 points (95% CI -3.3 to -0.03), Holm p = 0.10 |
 
-Three paired seeds cannot separate these arms, and the receipt says so. Both
-directions match the reference: more unique structures trend better, and blocked
-ordering is clearly the worst arm. Exact-expression accuracy was 0% in every arm,
-so this measures partial next-byte learning, not program generation.
+Two effects survive Holm correction. The diversity gain is not monotonic: 88
+structures (58.0%) is not separable from 8 (56.4%), so the reference's "more unique
+data is better" holds only up to 32 here. Exact-expression accuracy was 0% in every
+arm.
 
-## RL variant screen
+## RL variant screen and group-size confirmation
 
-Four arms from the same checkpoint, changing one design choice each: baseline
-(binary, penalty -0.1, T=0.35), low temperature (T=0.20), no invalid penalty, and
-case-fraction reward. Over 16 groups of 8 rollouts the baseline and the partial
-reward give the most signal (4/16 groups each), and low temperature gives the best
-result (dev 0.938 against 0.906). That reproduces the reference's direction without
-being powered to confirm it.
+Eight arms from one checkpoint, one design choice changed at a time, 16 groups x 8
+rollouts each, scored on 32 dev tasks:
+
+| Arm | Groups with signal | Exact rollouts | Dev pass@1 |
+| --- | --- | --- | --- |
+| baseline (binary, -0.1, T=0.35, group 8) | 4/16 | 100/128 | 0.906 |
+| partial-test reward | 4/16 | 100/128 | 0.906 |
+| invalid penalty 0 | 1/16 | 100/128 | 0.906 |
+| invalid penalty -1 | 3/16 | 100/128 | **0.938** |
+| temperature 0.20 | 2/16 | 104/128 | **0.938** |
+| temperature 0.80 | 1/16 | 0/128 | 0.906 |
+| group size 4 | 2/16 | 50/64 | 0.906 |
+| group size 16 | 4/16 | 200/256 | 0.906 |
+
+The group arms see 64 and 256 rollouts respectively for the same 16 prompts, so
+their exact counts are not comparable to the group-8 arms' 128.
+
+Exact McNemar over paired dev tasks puts every arm at Holm p = 1.00: two arms move
+one task, and one task out of 32 is noise. That is the same wall as before — the
+policy sits above the capability band, so there is almost nothing for a design
+choice to change.
+
+**Group-size confirmation.** Group 4 against group 8 over three seeds and 12 groups
+each:
+
+| Seed | Group 4 | Group 8 | Difference | McNemar p |
+| --- | --- | --- | --- | --- |
+| 11 | 0.938 | 0.906 | -0.031 | 1.000 |
+| 22 | 0.906 | 0.938 | +0.031 | 1.000 |
+| 33 | 0.906 | 0.906 | 0.000 | 1.000 |
+
+Seed mean +0.000, task-level 95% CI -0.031 to +0.031. Group 4 won one seed, lost
+one and tied one — which is exactly the reference's own conclusion when its dev
+winner failed to replicate.
 
 ## Receipts
 
@@ -237,24 +269,18 @@ produced a result.
 
 ## Performance notes
 
-| Stage | Wall clock | Peak GPU memory added |
+| Stage | Wall clock | Peak GPU memory |
 | --- | --- | --- |
-| Pretrain 400 steps (wgpu) | 155 s | fits in ~4 GiB free at batch 16 |
-| Pretrain 400 steps (flex) | ~32 min | n/a |
-| Pretrain 5 steps, batch 4 x 64 (wgpu) | 4 s | +724 MiB |
-| Greedy pass@1, 32 tasks (wgpu) | 16 s | not measured |
-| pass@8, 32 tasks (wgpu) | 46 s | not measured |
-| RLOO 32 groups x 8 (wgpu) | ~4 min | +241 MiB (measured on a 2-group run) |
+| Pretrain 400 steps (wgpu) | 155 s | fits batch 16 |
+| Vision comparison, 120 steps (flex) | 12.3 s | CPU |
+| Vision smoke, 40 steps (flex) | 1.0 s | CPU |
+| Vision pilot, 200 steps (flex) | 160.6 s | CPU |
+| Data diversity, 30 arms (flex) | 123.2 s | CPU |
+| Curriculum, 30 arms (flex) | 148.7 s | CPU |
+| RL variant screen, 8 arms (wgpu) | 631.6 s | not sampled |
+| Group confirmation, 6 runs (wgpu) | ~350 s | +489 MiB |
+| RL, 96 groups (wgpu) | 282 s | +2725 MiB |
 
-Burn does not expose allocator statistics, so `metrics::PeakMemory` polls
-`nvidia-smi` every 250 ms and reports the peak alongside the baseline it saw at
-start-up. That baseline includes whatever else is using the device, so the
-*delta* is the meaningful figure.
-
-The batch-16 ceiling is real: batch 32 exhausts the device with dense dispatch
-and fits with sparse dispatch. Measurements taken while another process held
-~3 GB of the GPU are therefore pessimistic, and one OOM cascade during
-development was caused by an unrelated tenant rather than by this port.
 
 ## Tests
 

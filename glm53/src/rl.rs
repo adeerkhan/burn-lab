@@ -582,7 +582,7 @@ mod tests {
 }
 
 /// One arm of the RL variant screen.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ScreenArmResult {
     pub arm: String,
     pub groups: usize,
@@ -595,6 +595,8 @@ pub struct ScreenArmResult {
     pub invalid_penalty: f64,
     pub pass_at_one: Option<f64>,
     pub seconds: f64,
+    /// Per-task dev verdicts, for paired comparisons across arms.
+    pub dev_outcomes: Vec<crate::analysis::TaskOutcome>,
 }
 
 /// Run a set of RL arms from the same checkpoint and report which ones learned.
@@ -611,6 +613,7 @@ pub fn screen(
 ) -> Vec<ScreenArmResult> {
     let config = crate::ModelConfig::new();
     let mut results = Vec::new();
+    let started = std::time::Instant::now();
 
     for (name, arm) in arms {
         let model = crate::vision_pilot::load_text_model(&config, device, base)
@@ -649,11 +652,103 @@ pub fn screen(
             reward_mode: arm.reward_mode.label().to_string(),
             invalid_penalty: arm.invalid_penalty,
             pass_at_one: Some(pass.pass_at_1),
-            seconds: 0.0,
+            seconds: started.elapsed().as_secs_f64(),
+            dev_outcomes: pass
+                .episodes
+                .iter()
+                .map(|episode| crate::analysis::TaskOutcome {
+                    task_id: episode.task_id.clone(),
+                    passed: episode.evaluation.passed,
+                })
+                .collect(),
         };
         on_arm(&result);
         results.push(result);
     }
 
     results
+}
+
+/// Run the same RL configuration at several group sizes and seeds.
+///
+/// Mirrors `scripts/run_rl_group_confirmation.sh`: every run starts from the same
+/// checkpoint and differs only in the rollout group size.
+#[allow(clippy::too_many_arguments)]
+pub fn group_confirmation(
+    base: &str,
+    group_sizes: &[usize],
+    seeds: &[u64],
+    tasks: &[CodingTask],
+    dev_tasks: &[CodingTask],
+    config: &RlConfig,
+    device: &Device,
+    mut on_run: impl FnMut(&crate::analysis::ConfirmationRun),
+) -> Vec<crate::analysis::ConfirmationRun> {
+    let model_config = crate::ModelConfig::new();
+    let mut runs = Vec::new();
+
+    for group_size in group_sizes {
+        for seed in seeds {
+            let started = std::time::Instant::now();
+            let model = crate::vision_pilot::load_text_model(&model_config, device, base)
+                .unwrap_or_else(|error| panic!("could not load {base}: {error}"));
+
+            let arm = RlConfig {
+                group_size: *group_size,
+                seed: *seed,
+                groups: config.groups,
+                temperature: config.temperature,
+                reward_mode: config.reward_mode,
+                invalid_penalty: config.invalid_penalty,
+                tasks_per_family: config.tasks_per_family,
+                learning_rate: config.learning_rate,
+                artifact_dir: format!("{}/g{group_size}-s{seed}", config.artifact_dir),
+                checkpoints: Vec::new(),
+                ..RlConfig::default()
+            };
+
+            let mut groups_with_signal = 0usize;
+            let mut exact = 0usize;
+            let mut rollouts = 0usize;
+            let trained = run_rl(model, tasks, &arm, device, |metrics| {
+                if metrics.updated {
+                    groups_with_signal += 1;
+                }
+                exact += metrics.exact_rollouts;
+                rollouts += *group_size;
+            });
+
+            let pass = crate::evaluation::pass_at_one(
+                &trained.valid(),
+                dev_tasks,
+                &crate::evaluation::GreedyConfig {
+                    max_new_tokens: 48,
+                    seed: 2026,
+                },
+                device,
+            );
+
+            let run = crate::analysis::ConfirmationRun {
+                group_size: *group_size,
+                seed: *seed,
+                groups: config.groups,
+                groups_with_signal,
+                exact_rollouts: exact,
+                rollouts,
+                seconds: started.elapsed().as_secs_f64(),
+                dev_outcomes: pass
+                    .episodes
+                    .iter()
+                    .map(|episode| crate::analysis::TaskOutcome {
+                        task_id: episode.task_id.clone(),
+                        passed: episode.evaluation.passed,
+                    })
+                    .collect(),
+            };
+            on_run(&run);
+            runs.push(run);
+        }
+    }
+
+    runs
 }

@@ -9,8 +9,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-# Burn, pinned to the release this port was written against. so the lab always exercises the
-# code in `../burn` rather than a published release.
+# Burn, pinned to the release this port was written against.
 burn = { version = "=0.23.0-pre.2", features = [
     "flex",
     "train",

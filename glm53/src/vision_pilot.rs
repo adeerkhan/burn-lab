@@ -388,6 +388,38 @@ mod tests {
         }
     }
 
+    /// Acceptance: greedy output on a text-only prompt is unchanged by the
+    /// vision path being compiled in.
+    #[test]
+    fn greedy_output_is_unchanged_by_the_widened_vocabulary() {
+        let device = Device::flex();
+        let source_config = crate::ModelConfig::new()
+            .with_dim(32)
+            .with_heads(4)
+            .with_layers(1)
+            .with_experts(2)
+            .with_expert_hidden(16)
+            .with_streams(2)
+            .with_max_sequence_length(64);
+        let target_config = source_config.clone().with_vocab_size(REQUIRED_VOCAB);
+
+        let source = GLM53Flash::new(&source_config, &device).valid();
+        let widened = extend_vocab(&source, GLM53Flash::new(&target_config, &device).valid());
+
+        let ids: Vec<i64> = vec![1, 14, 40, 20, 30, 50];
+        let text = Tensor::<2, Int>::from_data(TensorData::new(ids, [1, 6]), &device);
+
+        let (small, _) = source.forward(text.clone());
+        let (large, _) = widened.forward(text);
+
+        let small = small.argmax(2).into_data().convert::<i32>();
+        let small = small.as_slice::<i32>().unwrap();
+        let large = large.argmax(2).into_data().convert::<i32>();
+        let large = large.as_slice::<i32>().unwrap();
+
+        assert_eq!(small, large, "greedy tokens must not change");
+    }
+
     #[test]
     fn the_widened_model_keeps_the_text_logits() {
         let device = Device::flex();

@@ -35,7 +35,10 @@ COMMANDS:
     vision          Train and compare the two image paths on RGB digits
     vision-pilot    Attach the vision tower to the full 25.7M language model
     experiment      Run a matched miniature pretraining study
-    rl-screen       Run several RLOO variants from the same checkpoint
+    rl-screen       Run the eight-arm RLOO variant screen from one checkpoint
+    rl-confirm      Compare group sizes across seeds from one checkpoint
+    analyze-rl      Analyze a screen or confirmation receipt
+    analyze-results Summarize every receipt in a directory
     analyze         Apply paired statistics to a study receipt
     system-receipt  Capture the runtime and hardware that produced a result
 
@@ -94,6 +97,7 @@ struct Options {
     architecture: String,
     smoke: bool,
     study: String,
+    kind: String,
     diversities: String,
     conditions: String,
     study_json: String,
@@ -133,6 +137,7 @@ impl Default for Options {
             architecture: "both".to_string(),
             smoke: false,
             study: "diversity".to_string(),
+            kind: "variants".to_string(),
             diversities: "8,32,88".to_string(),
             conditions: "curriculum-8-to-88,diverse-interleaved,diverse-blocked".to_string(),
             study_json: String::new(),
@@ -199,14 +204,12 @@ impl Options {
                 "--json" => options.json = value(&mut index),
                 "--architecture" => options.architecture = value(&mut index),
                 "--study" => options.study = value(&mut index),
+                "--kind" => options.kind = value(&mut index),
                 "--diversities" => options.diversities = value(&mut index),
                 "--conditions" => options.conditions = value(&mut index),
                 "--seeds" => options.seeds = value(&mut index),
                 "--study-json" => options.study_json = value(&mut index),
-                "--smoke-test" => {
-                    options.smoke = true;
-                    continue;
-                }
+                "--smoke-test" => options.smoke = true,
                 "--families" => {
                     options.families = value(&mut index)
                         .split(',')
@@ -646,11 +649,16 @@ fn main() {
             let dev_tasks = options.tasks("dev");
             let rl_tasks = options.tasks("rl");
 
+            // The reference's eight-arm screen: one design choice changed at a time.
             let preset: Vec<(&str, RewardMode, f64, f64, usize)> = vec![
                 ("baseline", RewardMode::Binary, -0.1, 0.35, 8),
-                ("low-temp", RewardMode::Binary, -0.1, 0.20, 8),
-                ("no-penalty", RewardMode::Binary, 0.0, 0.35, 8),
                 ("partial-reward", RewardMode::CaseFraction, -0.1, 0.35, 8),
+                ("no-penalty", RewardMode::Binary, 0.0, 0.35, 8),
+                ("harsh-penalty", RewardMode::Binary, -1.0, 0.35, 8),
+                ("low-temp", RewardMode::Binary, -0.1, 0.20, 8),
+                ("high-temp", RewardMode::Binary, -0.1, 0.80, 8),
+                ("group-4", RewardMode::Binary, -0.1, 0.35, 4),
+                ("group-16", RewardMode::Binary, -0.1, 0.35, 16),
             ];
 
             let arms: Vec<(String, RlConfig)> = preset
@@ -675,6 +683,7 @@ fn main() {
                 .collect();
 
             let device = options.device().autodiff();
+            let memory = PeakMemory::start();
             println!(
                 "RL variant screen: {} arms x {} groups x {} rollouts from {base}",
                 arms.len(),
@@ -705,7 +714,11 @@ fn main() {
                 },
             );
 
-            println!("\ntotal {:.1}s", started.elapsed().as_secs_f64());
+            println!(
+                "\ntotal {:.1}s, {}",
+                started.elapsed().as_secs_f64(),
+                describe(memory.stop())
+            );
             if !options.json.is_empty() {
                 if let Some(parent) = std::path::Path::new(&options.json).parent() {
                     std::fs::create_dir_all(parent).ok();
@@ -716,6 +729,183 @@ fn main() {
                 )
                 .expect("write the screen");
                 println!("wrote {}", options.json);
+            }
+        }
+        "analyze-results" => {
+            let directory = if options.out.is_empty() {
+                "artifacts".to_string()
+            } else {
+                options.out.clone()
+            };
+            let summary = analysis::analyze_results(&directory);
+            println!(
+                "summarised {} receipts from {directory}",
+                summary["receipts"]
+            );
+            let json = if options.json.is_empty() {
+                "artifacts/results-summary.json".to_string()
+            } else {
+                options.json.clone()
+            };
+            if let Some(parent) = std::path::Path::new(&json).parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            std::fs::write(
+                &json,
+                serde_json::to_string_pretty(&summary).expect("serialise") + "\n",
+            )
+            .expect("write the summary");
+            println!("wrote {json}");
+        }
+        "rl-confirm" => {
+            let base = options.checkpoint_dir();
+            let dev_tasks = options.tasks("dev");
+            let rl_tasks = options.tasks("rl");
+            let group_sizes: Vec<usize> = options
+                .diversities
+                .split(',')
+                .filter(|part| !part.trim().is_empty())
+                .map(|part| part.trim().parse().expect("invalid group sizes"))
+                .collect();
+            let seeds: Vec<u64> = options
+                .seeds
+                .split(',')
+                .filter(|part| !part.trim().is_empty())
+                .map(|part| part.trim().parse().expect("invalid --seeds"))
+                .take(3)
+                .collect();
+
+            let config = RlConfig {
+                groups: options.groups,
+                temperature: options.temperature.max(0.35),
+                reward_mode: RewardMode::parse(&options.reward_mode),
+                invalid_penalty: options.invalid_penalty,
+                tasks_per_family: options.tasks_per_family,
+                learning_rate: options.learning_rate.unwrap_or(5e-5),
+                artifact_dir: format!("{}/confirm", options.out),
+                ..RlConfig::default()
+            };
+
+            let device = options.device().autodiff();
+            let memory = PeakMemory::start();
+            println!(
+                "Group-size confirmation: sizes {:?} x {} seeds from {base}, {} groups each",
+                group_sizes,
+                seeds.len(),
+                config.groups
+            );
+
+            let runs = glm53::rl::group_confirmation(
+                &base,
+                &group_sizes,
+                &seeds,
+                &rl_tasks,
+                &dev_tasks,
+                &config,
+                &device,
+                |run| {
+                    println!(
+                        "  group {:>2} seed {:>3}  signal {:>2}/{}  exact {:>3}/{}  {:.1}s",
+                        run.group_size,
+                        run.seed,
+                        run.groups_with_signal,
+                        run.groups,
+                        run.exact_rollouts,
+                        run.rollouts,
+                        run.seconds
+                    );
+                },
+            );
+
+            println!("\n{}", describe(memory.stop()));
+            if !options.json.is_empty() {
+                if let Some(parent) = std::path::Path::new(&options.json).parent() {
+                    std::fs::create_dir_all(parent).ok();
+                }
+                std::fs::write(
+                    &options.json,
+                    serde_json::to_string_pretty(&runs).expect("serialise") + "\n",
+                )
+                .expect("write the confirmation");
+                println!("wrote {}", options.json);
+            }
+        }
+        "analyze-rl" => {
+            assert!(
+                !options.study_json.is_empty(),
+                "--study-json is required by `analyze-rl`"
+            );
+            let text = std::fs::read_to_string(&options.study_json)
+                .unwrap_or_else(|error| panic!("could not read {}: {error}", options.study_json));
+
+            let json = if options.json.is_empty() {
+                "artifacts/analysis-rl.json".to_string()
+            } else {
+                options.json.clone()
+            };
+
+            if options.kind == "confirmation" {
+                let runs: Vec<glm53::analysis::ConfirmationRun> =
+                    serde_json::from_str(&text).expect("parse the confirmation receipt");
+                let sizes: Vec<usize> = {
+                    let mut values: Vec<usize> = runs.iter().map(|run| run.group_size).collect();
+                    values.sort_unstable();
+                    values.dedup();
+                    values
+                };
+                let smaller = *sizes.first().expect("at least one group size");
+                let larger = *sizes.last().expect("at least one group size");
+                let analysis = glm53::analysis::analyze_group_confirmation(&runs, smaller, larger);
+
+                println!(
+                    "group {larger} minus group {smaller}, {} seeds",
+                    analysis.per_seed.len()
+                );
+                for row in &analysis.per_seed {
+                    println!(
+                        "  seed {:>3}  group {smaller} {:.3}  group {larger} {:.3}  diff {:+.3}  p {:.3}",
+                        row.seed, row.smaller, row.larger, row.difference, row.mcnemar_p
+                    );
+                }
+                println!(
+                    "\nseed mean {:+.3}   task-level {:+.3} (95% CI {:+.3} to {:+.3})",
+                    analysis.seed_mean_difference,
+                    analysis.task_mean_difference,
+                    analysis.task_ci_low,
+                    analysis.task_ci_high
+                );
+                std::fs::write(
+                    &json,
+                    serde_json::to_string_pretty(&analysis).expect("serialise") + "\n",
+                )
+                .expect("write the analysis");
+                println!("wrote {json}");
+            } else {
+                let arms: Vec<glm53::rl::ScreenArmResult> =
+                    serde_json::from_str(&text).expect("parse the screen receipt");
+                let analysis = glm53::analysis::analyze_variants(&arms);
+
+                println!("reference arm: {}\n", analysis.reference_arm);
+                println!(
+                    "{:<15} {:>10} {:>10} {:>12} {:>10}",
+                    "arm", "only arm", "only ref", "mean diff", "Holm p"
+                );
+                for (name, comparison) in &analysis.comparisons {
+                    println!(
+                        "{:<15} {:>10} {:>10} {:>+12.3} {:>10.3}",
+                        name,
+                        comparison.treatment_only,
+                        comparison.reference_only,
+                        comparison.mean_difference,
+                        comparison.adjusted_p
+                    );
+                }
+                std::fs::write(
+                    &json,
+                    serde_json::to_string_pretty(&analysis).expect("serialise") + "\n",
+                )
+                .expect("write the analysis");
+                println!("\nwrote {json}");
             }
         }
         "experiment" => {
@@ -936,6 +1126,22 @@ fn write_json<T: serde::Serialize>(path: &str, report: &T) {
 }
 
 fn load_model(config: &ModelConfig, device: &Device, directory: &str) -> GLM53Flash {
+    // A checkpoint that carries a receipt must match it: a changed weight file is
+    // a hard error. Checkpoints written before receipts existed load with a note.
+    let path = std::path::Path::new(directory);
+    match receipt::verify(path) {
+        Ok(receipt) => {
+            println!(
+                "  verified {directory} ({} at step {})",
+                receipt.stage, receipt.step
+            );
+        }
+        Err(receipt::ReceiptError::Missing(_)) => {
+            eprintln!("  warning: {directory} has no receipt; loading unverified");
+        }
+        Err(error) => panic!("refusing to load `{directory}`: {error}"),
+    }
+
     let record = ModuleRecord::load(format!("{directory}/model")).unwrap_or_else(|error| {
         panic!("could not load a model from `{directory}`: {error}; run `train` first")
     });

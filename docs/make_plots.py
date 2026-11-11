@@ -734,7 +734,7 @@ def experiments_chart() -> None:
     draw.text((60, 36), "Two matched miniature studies", font=font(38, True), fill=INK)
     draw.text(
         (62, 92),
-        "same model, optimiser, steps and batch; only the data presentation changes",
+        "same model, optimiser, steps and batch; only the data presentation changes. Ten paired seeds.",
         font=font(21),
         fill=MUTED,
     )
@@ -775,13 +775,13 @@ def experiments_chart() -> None:
 
     draw.text(
         (60, height - 84),
-        "More unique structures trend better (+2.0 pts, CI 0.5-3.9) but 3 seeds cannot separate them;",
-        font=font(19),
+        "32 structures beat 8 by +3.8 pts (Holm p = 0.008); blocked ordering loses 9.3 pts (Holm p = 0.004).",
+        font=font(19, True),
         fill=INK,
     )
     draw.text(
         (60, height - 54),
-        "blocked ordering is clearly the worst arm (-10.3 pts), the same direction the reference reports.",
+        "88 structures is not separable from 8 at ten seeds, so the gain is not monotonic in diversity.",
         font=font(19),
         fill=INK,
     )
