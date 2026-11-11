@@ -1,0 +1,81 @@
+{
+  "tasks_solved_at_k": 56,
+  "tasks_total": 64,
+  "pass_at_k": 0.875,
+  "samples_per_task": 8,
+  "exact_rollouts": 422,
+  "rollouts_total": 512,
+  "exact_rollout_rate": 0.82421875,
+  "tests_passed": 1275,
+  "tests_total": 1536,
+  "test_accuracy": 0.830078125,
+  "valid_rollouts": 434,
+  "token_cap_hits": 29,
+  "elapsed_seconds": 89.844286554,
+  "by_family": [
+    {
+      "family": "absolute",
+      "tasks": 8,
+      "solved": 8,
+      "exact_rollouts": 59,
+      "rollouts": 64,
+      "valid_rollouts": 59
+    },
+    {
+      "family": "double",
+      "tasks": 8,
+      "solved": 8,
+      "exact_rollouts": 57,
+      "rollouts": 64,
+      "valid_rollouts": 59
+    },
+    {
+      "family": "even",
+      "tasks": 8,
+      "solved": 8,
+      "exact_rollouts": 60,
+      "rollouts": 64,
+      "valid_rollouts": 61
+    },
+    {
+      "family": "increment",
+      "tasks": 8,
+      "solved": 8,
+      "exact_rollouts": 56,
+      "rollouts": 64,
+      "valid_rollouts": 59
+    },
+    {
+      "family": "list_sum",
+      "tasks": 8,
+      "solved": 8,
+      "exact_rollouts": 64,
+      "rollouts": 64,
+      "valid_rollouts": 64
+    },
+    {
+      "family": "nonnegative",
+      "tasks": 8,
+      "solved": 8,
+      "exact_rollouts": 62,
+      "rollouts": 64,
+      "valid_rollouts": 62
+    },
+    {
+      "family": "reverse",
+      "tasks": 8,
+      "solved": 0,
+      "exact_rollouts": 0,
+      "rollouts": 64,
+      "valid_rollouts": 6
+    },
+    {
+      "family": "square",
+      "tasks": 8,
+      "solved": 8,
+      "exact_rollouts": 64,
+      "rollouts": 64,
+      "valid_rollouts": 64
+    }
+  ]
+}

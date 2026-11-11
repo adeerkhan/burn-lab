@@ -56,8 +56,59 @@ split**, at both pass@1 and pass@8:
 | confirm pass@1 | **0.906 (29/32)** | 0.844 (27/32) |
 | confirm pass@8 | **0.875 (28/32)** | 0.813 (26/32) |
 
-That is overfitting, and it is the honest result. 32 groups of binary reward on a 25M model is not
-enough to generalise; the reference reports the same pattern on its untrained families.
+<img src="docs/comparison.webp" alt="Pretraining, RL progress and the confirmation split side by side" width="100%"/>
+
+The three panels mirror the reference's own main-results chart: pretraining learns code, RL raises the
+on-policy rollout rate, and the untouched confirmation split decides whether any of it generalised.
+The shape reproduces. The outcome does not.
+
+<img src="docs/families.webp" alt="Exact sampled completions per family before and after RL" width="100%"/>
+
+Per family on confirm, RL moved two families backwards and one forwards: `increment` 94% → 73%,
+`double` 92% → 84%, `absolute` 81% → 95%, everything else flat. Note that RL trained on **all eight**
+families here, not the three the reference uses — so this is interference between families the reward
+touched, not transfer to families it did not.
+
+<img src="docs/generation.webp" alt="The same prompt before and after RL, one gain and one loss" width="100%"/>
+
+The clearest single illustration. On dev, RL repaired a syntax error (`text[:::-1]` → `text[::-1]`).
+On confirm, it broke working code (`text[::-1]` → `text[:-1]`). Same model, same verifier, opposite
+directions.
+
+### Why our result differs from the reference's
+
+The reference reports confirm greedy going **0/24 → 16/24**. Ours went 29/32 → 27/32. We ran two
+replications to find out why, and both are informative.
+
+**Their exact configuration, from our weakest checkpoint.** 96 groups x 16 rollouts, T=0.35, the same
+three families, `last-block-head`, from step 100. On confirm our step 100 scores **0/32 — the same
+floor as their 0/24**, so the starting condition does match. But only **4 of 96 groups** produced a
+non-zero reward spread: every one of the 16 sampled rollouts was invalid, so every advantage was zero
+and no step was taken. After 96 groups, confirm moved 0/32 → 1/32.
+
+**Their budget, from a capability-matched checkpoint.** Their checkpoint 100 had seen 346k tokens; our
+step 200 has seen 410k. From there the same 96 groups x 16 rollouts produced **26 updates** — the
+method does work at this scale — and left the model behaviourally where it started: dev 29/32 → 29/32,
+confirm 29/32 → 29/32. At that point the trained families already sample correctly 95–100% of the
+time, so there is nothing left for the reward to fix.
+
+| | Reference | Their config, our weak checkpoint | Their budget, matched checkpoint |
+| --- | --- | --- | --- |
+| Confirm before | 0/24 | 0/32 | 29/32 |
+| Groups with reward signal | 73 of 96 | 4 of 96 | 26 of 96 |
+| Confirm after | 16/24 | 1/32 | 29/32 |
+
+<img src="docs/band.webp" alt="Reward signal and confirm movement across the three runs" width="100%"/>
+
+**The finding: executable-reward RL has a capability floor and a capability ceiling, and there is only
+a narrow band between them.** Below the floor every rollout is invalid, every advantage is zero, and
+extra compute buys nothing — that is where our step-100 policy sits. Above the ceiling the reward has
+nothing to correct — that is where our step-200 policy sits. The reference's checkpoint landed inside
+the band; that is a property of its pretraining budget, and nothing in the write-up makes it visible.
+
+The practical consequence for anyone copying the method: **check that your policy emits valid programs
+before spending compute on RL.** One pass@k run on the training split tells you which side of the band
+you are on, and we did not run it first.
 
 ## Model
 
@@ -173,6 +224,29 @@ burn-lab/
 
 ## The port
 
+### How complete is this
+
+The language-model half is complete and verified. The vision path and the research scripts are not
+ported, and this README says so rather than implying otherwise.
+
+| Reference | Status |
+| --- | --- |
+| `glm53_flash/model.py` | ported — `attention.rs`, `moe.rs`, `block.rs`, `model.rs`. Counts match to the digit. |
+| `tokenizer.py`, `tasks.py` | ported |
+| `evaluator.py` | ported — Rust driver, embedded `python3` harness, same allowlist semantics |
+| `runtime.py` | partial — `generate_group` and checkpoint I/O are ported; sha256 receipts are not |
+| `train_pretrain.py`, `train_rl.py` | ported |
+| `evaluate.py`, `evaluate_passk.py` | ported, with `--json` receipts |
+| `vision.py`, `train_vision.py` | **not ported** |
+| `experiments/*` (5 scripts) | **not ported** — data diversity, ordering, curriculum |
+| `analyze_*.py` (3 scripts) | **not ported** — McNemar, bootstrap, Holm correction |
+| `system_receipt.py` | **not ported** |
+| `tests/` | replaced — 44 Rust tests, including a gradient check the reference does not have |
+
+By line count: 4,045 lines of Rust for the model, training, evaluation and RL, against 980 lines of
+reference model code — but 2,853 lines of the reference's analysis and experiment scripts have no
+counterpart here.
+
 ### What matches the reference
 
 - **The model, exactly.** Same shapes, same parameter counts, same tied head.
@@ -276,6 +350,33 @@ preserves tensor kind, `Int` defaults to I32, and `visit_float` does not name th
 
 None of it was fatal. The two things that genuinely surprised us in Burn's favour were `RmsNorm`
 accepting any rank, and `RotaryEncoding` being numerically identical to a hand-written RoPE.
+
+## What this port adds
+
+The reference is a research demo. This is a research demo *and* a port, which made a few things
+possible that the original could not do:
+
+- **A second implementation to check the first against.** The reference has no way to test its own
+  algorithm, because it is the only implementation. Here, the linear attention is checked against a
+  direct transcription of the reference's cumulative-sum definition, sparse and dense expert dispatch
+  agree to 1e-5, and every gradient is checked against finite differences. Those tests exist only
+  because there are two formulations to compare.
+- **A cross-backend differential.** `flex` and `wgpu` must agree to 1e-4 on the same weights. A
+  single-stack project cannot ask that question.
+- **A measured framework comparison.** 134 MB binary versus a 6.8 GB virtualenv, decode-shape latency
+  ahead, CPU throughput behind. See [Burn versus the Python stack](#burn-versus-the-python-stack).
+  The reference reports no framework-level numbers at all.
+- **A negative replication, run deliberately.** We reproduced the experiment, found the outcome
+  differs, and identified which knob explains it — rollout budget against a saturated policy. The
+  family-level data shows interference *between* rewarded families, which the reference's
+  three-family design could not observe.
+- **Systems findings.** An out-of-memory condition surfacing as `SIGILL` rather than an `Err`, a wgpu
+  device left lost across processes after it, and variable-length expert dispatch defeating JIT kernel
+  reuse by 30x. None of these are visible from Python.
+
+What the reference does better, for the record: the vision path, three paired-seed pretraining
+ablations with p-values, an eight-arm RL variant screen with a McNemar confirmation, and a receipts
+discipline that preserves every rollout and checkpoint hash.
 
 ## Tests
 

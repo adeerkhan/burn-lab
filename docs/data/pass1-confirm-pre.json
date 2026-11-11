@@ -1,0 +1,559 @@
+{
+  "tasks_solved": 29,
+  "tasks_total": 32,
+  "pass_at_1": 0.90625,
+  "tests_passed": 90,
+  "tests_total": 96,
+  "test_accuracy": 0.9375,
+  "valid_programs": 32,
+  "token_cap_hits": 0,
+  "elapsed_seconds": 23.477756507,
+  "by_family": [
+    {
+      "family": "absolute",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "double",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "even",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "increment",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "list_sum",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "nonnegative",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "reverse",
+      "tasks": 4,
+      "solved": 1,
+      "exact_rollouts": 1,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "square",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    }
+  ],
+  "episodes": [
+    {
+      "task_id": "confirm-increment-000",
+      "family": "increment",
+      "generated_completion": "\n    return x + 1\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-increment-001",
+      "family": "increment",
+      "generated_completion": "\n    return x + 1\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-increment-002",
+      "family": "increment",
+      "generated_completion": "\n    return x + 1\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-increment-003",
+      "family": "increment",
+      "generated_completion": "\n    return x + 1\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-double-000",
+      "family": "double",
+      "generated_completion": "\n    return x * 2\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-double-001",
+      "family": "double",
+      "generated_completion": "\n    return x * 2\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-double-002",
+      "family": "double",
+      "generated_completion": "\n    return x * 2\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-double-003",
+      "family": "double",
+      "generated_completion": "\n    return x * 2\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-square-000",
+      "family": "square",
+      "generated_completion": "\n    return x * x\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-square-001",
+      "family": "square",
+      "generated_completion": "\n    return x * x\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-square-002",
+      "family": "square",
+      "generated_completion": "\n    return x * x\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-square-003",
+      "family": "square",
+      "generated_completion": "\n    return x * x\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-absolute-000",
+      "family": "absolute",
+      "generated_completion": "\n    return -x if x < 0 else x\n",
+      "generated_tokens": 31,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-absolute-001",
+      "family": "absolute",
+      "generated_completion": "\n    return -x if x < 0 else x\n",
+      "generated_tokens": 31,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-absolute-002",
+      "family": "absolute",
+      "generated_completion": "\n    return -x if x < 0 else x\n",
+      "generated_tokens": 31,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-absolute-003",
+      "family": "absolute",
+      "generated_completion": "\n    return -x if x < 0 else x\n",
+      "generated_tokens": 31,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-nonnegative-000",
+      "family": "nonnegative",
+      "generated_completion": "\n    return x if x > 0 else 0\n",
+      "generated_tokens": 30,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-nonnegative-001",
+      "family": "nonnegative",
+      "generated_completion": "\n    return x if x > 0 else 0\n",
+      "generated_tokens": 30,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-nonnegative-002",
+      "family": "nonnegative",
+      "generated_completion": "\n    return x if x > 0 else 0\n",
+      "generated_tokens": 30,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-nonnegative-003",
+      "family": "nonnegative",
+      "generated_completion": "\n    return x if x > 0 else 0\n",
+      "generated_tokens": 30,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-even-000",
+      "family": "even",
+      "generated_completion": "\n    return x % 2 == 0\n",
+      "generated_tokens": 23,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-even-001",
+      "family": "even",
+      "generated_completion": "\n    return x % 2 == 0\n",
+      "generated_tokens": 23,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-even-002",
+      "family": "even",
+      "generated_completion": "\n    return x % 2 == 0\n",
+      "generated_tokens": 23,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-even-003",
+      "family": "even",
+      "generated_completion": "\n    return x % 2 == 0\n",
+      "generated_tokens": 23,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-reverse-000",
+      "family": "reverse",
+      "generated_completion": "\n    return text[:-1]\n",
+      "generated_tokens": 22,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "failed",
+        "passed": false,
+        "tests_passed": 1,
+        "tests_total": 3,
+        "pass_fraction": 0.3333333333333333,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-reverse-001",
+      "family": "reverse",
+      "generated_completion": "\n    return text[:-1]\n",
+      "generated_tokens": 22,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "failed",
+        "passed": false,
+        "tests_passed": 1,
+        "tests_total": 3,
+        "pass_fraction": 0.3333333333333333,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-reverse-002",
+      "family": "reverse",
+      "generated_completion": "\n    return text[::-1]\n",
+      "generated_tokens": 23,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-reverse-003",
+      "family": "reverse",
+      "generated_completion": "\n    return text[:-1]\n",
+      "generated_tokens": 22,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "failed",
+        "passed": false,
+        "tests_passed": 1,
+        "tests_total": 3,
+        "pass_fraction": 0.3333333333333333,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-list_sum-000",
+      "family": "list_sum",
+      "generated_completion": "\n    return sum(values)\n",
+      "generated_tokens": 24,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-list_sum-001",
+      "family": "list_sum",
+      "generated_completion": "\n    return sum(values)\n",
+      "generated_tokens": 24,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-list_sum-002",
+      "family": "list_sum",
+      "generated_completion": "\n    return sum(values)\n",
+      "generated_tokens": 24,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "confirm-list_sum-003",
+      "family": "list_sum",
+      "generated_completion": "\n    return sum(values)\n",
+      "generated_tokens": 24,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    }
+  ]
+}

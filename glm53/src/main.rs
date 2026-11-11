@@ -43,6 +43,7 @@ OPTIONS:
     --split <NAME>          dev | final | confirm | rl         (default: dev)
     --per-family <N>        Tasks per family                   (default: 4)
     --families <LIST>       Restrict to families, comma separated
+    --json <PATH>           Write the full report as JSON
     --samples <N>           Samples per task for pass@k        (default: 8)
     --temperature <F>       Sampling temperature, 0 = greedy   (default: 0)
     --max-new <N>           Max new bytes                      (default: 48)
@@ -72,6 +73,7 @@ struct Options {
     split: String,
     per_family: usize,
     families: Vec<String>,
+    json: String,
     samples: usize,
     temperature: f64,
     max_new: usize,
@@ -103,6 +105,7 @@ impl Default for Options {
             split: "dev".to_string(),
             per_family: 4,
             families: Vec::new(),
+            json: String::new(),
             samples: 8,
             temperature: 0.0,
             max_new: 48,
@@ -162,6 +165,7 @@ impl Options {
                 "--per-family" => {
                     options.per_family = value(&mut index).parse().expect("invalid --per-family")
                 }
+                "--json" => options.json = value(&mut index),
                 "--families" => {
                     options.families = value(&mut index)
                         .split(',')
@@ -379,6 +383,7 @@ fn main() {
                 &device,
             );
             print_pass_at_one(&report);
+            write_json(&options.json, &report);
         }
         "evaluate-passk" => {
             let device = options.device();
@@ -408,6 +413,7 @@ fn main() {
                 &device,
             );
             print_pass_at_k(&report);
+            write_json(&options.json, &report);
         }
         "rl" => {
             let started = Instant::now();
@@ -548,6 +554,19 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+/// Write a report when `--json` was given.
+fn write_json<T: serde::Serialize>(path: &str, report: &T) {
+    if path.is_empty() {
+        return;
+    }
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let text = serde_json::to_string_pretty(report).expect("serialise the report");
+    std::fs::write(path, text + "\n").expect("write the report");
+    println!("wrote {path}");
 }
 
 fn load_model(config: &ModelConfig, device: &Device, directory: &str) -> GLM53Flash {

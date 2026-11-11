@@ -1,0 +1,559 @@
+{
+  "tasks_solved": 30,
+  "tasks_total": 32,
+  "pass_at_1": 0.9375,
+  "tests_passed": 92,
+  "tests_total": 96,
+  "test_accuracy": 0.9583333333333334,
+  "valid_programs": 32,
+  "token_cap_hits": 0,
+  "elapsed_seconds": 22.893922284,
+  "by_family": [
+    {
+      "family": "absolute",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "double",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "even",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "increment",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "list_sum",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "nonnegative",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "reverse",
+      "tasks": 4,
+      "solved": 2,
+      "exact_rollouts": 2,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    },
+    {
+      "family": "square",
+      "tasks": 4,
+      "solved": 4,
+      "exact_rollouts": 4,
+      "rollouts": 4,
+      "valid_rollouts": 4
+    }
+  ],
+  "episodes": [
+    {
+      "task_id": "dev-increment-000",
+      "family": "increment",
+      "generated_completion": "\n    return x + 1\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-increment-001",
+      "family": "increment",
+      "generated_completion": "\n    return x + 1\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-increment-002",
+      "family": "increment",
+      "generated_completion": "\n    return x + 1\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-increment-003",
+      "family": "increment",
+      "generated_completion": "\n    return x + 1\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-double-000",
+      "family": "double",
+      "generated_completion": "\n    return x * 2\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-double-001",
+      "family": "double",
+      "generated_completion": "\n    return x * 2\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-double-002",
+      "family": "double",
+      "generated_completion": "\n    return x * 2\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-double-003",
+      "family": "double",
+      "generated_completion": "\n    return x * 2\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-square-000",
+      "family": "square",
+      "generated_completion": "\n    return x * x\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-square-001",
+      "family": "square",
+      "generated_completion": "\n    return x * x\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-square-002",
+      "family": "square",
+      "generated_completion": "\n    return x * x\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-square-003",
+      "family": "square",
+      "generated_completion": "\n    return x * x\n",
+      "generated_tokens": 18,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-absolute-000",
+      "family": "absolute",
+      "generated_completion": "\n    return -x if x < 0 else x\n",
+      "generated_tokens": 31,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-absolute-001",
+      "family": "absolute",
+      "generated_completion": "\n    return -x if x < 0 else x\n",
+      "generated_tokens": 31,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-absolute-002",
+      "family": "absolute",
+      "generated_completion": "\n    return -x if x < 0 else x\n",
+      "generated_tokens": 31,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-absolute-003",
+      "family": "absolute",
+      "generated_completion": "\n    return -x if x < 0 else x\n",
+      "generated_tokens": 31,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-nonnegative-000",
+      "family": "nonnegative",
+      "generated_completion": "\n    return x if x > 0 else 0\n",
+      "generated_tokens": 30,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-nonnegative-001",
+      "family": "nonnegative",
+      "generated_completion": "\n    return x if x > 0 else 0\n",
+      "generated_tokens": 30,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-nonnegative-002",
+      "family": "nonnegative",
+      "generated_completion": "\n    return x if x > 0 else 0\n",
+      "generated_tokens": 30,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-nonnegative-003",
+      "family": "nonnegative",
+      "generated_completion": "\n    return x if x > 0 else 0\n",
+      "generated_tokens": 30,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-even-000",
+      "family": "even",
+      "generated_completion": "\n    return x % 2 == 0\n",
+      "generated_tokens": 23,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-even-001",
+      "family": "even",
+      "generated_completion": "\n    return x % 2 == 0\n",
+      "generated_tokens": 23,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-even-002",
+      "family": "even",
+      "generated_completion": "\n    return x % 2 == 0\n",
+      "generated_tokens": 23,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-even-003",
+      "family": "even",
+      "generated_completion": "\n    return x % 2 == 0\n",
+      "generated_tokens": 23,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-reverse-000",
+      "family": "reverse",
+      "generated_completion": "\n    return text[:-1]\n",
+      "generated_tokens": 22,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "failed",
+        "passed": false,
+        "tests_passed": 1,
+        "tests_total": 3,
+        "pass_fraction": 0.3333333333333333,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-reverse-001",
+      "family": "reverse",
+      "generated_completion": "\n    return text[::-1]\n",
+      "generated_tokens": 23,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-reverse-002",
+      "family": "reverse",
+      "generated_completion": "\n    return text[:-1]\n",
+      "generated_tokens": 22,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "failed",
+        "passed": false,
+        "tests_passed": 1,
+        "tests_total": 3,
+        "pass_fraction": 0.3333333333333333,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-reverse-003",
+      "family": "reverse",
+      "generated_completion": "\n    return text[::-1]\n",
+      "generated_tokens": 23,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-list_sum-000",
+      "family": "list_sum",
+      "generated_completion": "\n    return sum(values)\n",
+      "generated_tokens": 24,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-list_sum-001",
+      "family": "list_sum",
+      "generated_completion": "\n    return sum(values)\n",
+      "generated_tokens": 24,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-list_sum-002",
+      "family": "list_sum",
+      "generated_completion": "\n    return sum(values)\n",
+      "generated_tokens": 24,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    },
+    {
+      "task_id": "dev-list_sum-003",
+      "family": "list_sum",
+      "generated_completion": "\n    return sum(values)\n",
+      "generated_tokens": 24,
+      "hit_token_cap": false,
+      "evaluation": {
+        "status": "passed",
+        "passed": true,
+        "tests_passed": 3,
+        "tests_total": 3,
+        "pass_fraction": 1.0,
+        "message": ""
+      }
+    }
+  ]
+}
