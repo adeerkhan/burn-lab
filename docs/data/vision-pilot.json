@@ -1,0 +1,28 @@
+{
+ "schema_version": "1.0",
+ "status": "complete",
+ "stage": "full_25m_vision_digit_pilot",
+ "checkpoint": "artifacts/glm53-run/checkpoint-0400",
+ "checkpoint_sha256": null,
+ "vision_tokens": 16,
+ "language_parameters": 25731168,
+ "trainable_parameters": 2298272,
+ "visual_parameters": 107544,
+ "steps_completed": 200,
+ "before": {
+  "accuracy": 0.0,
+  "loss": 10.430124282836914,
+  "correct": 0,
+  "examples": 100
+ },
+ "after": {
+  "accuracy": 0.32,
+  "loss": 1.342271327972412,
+  "correct": 32,
+  "examples": 100
+ },
+ "final_training_loss": 1.2418396472930908,
+ "wall_time_seconds": 160.619247424,
+ "trainable_scope": "vision + last block + final norm + tied embedding",
+ "weights_saved": false
+}

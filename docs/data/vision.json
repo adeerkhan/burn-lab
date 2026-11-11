@@ -1,0 +1,70 @@
+{
+ "schema_version": "1.0",
+ "status": "complete",
+ "dataset": "generated RGB seven-segment digits",
+ "config": {
+  "seed": 42,
+  "steps": 120,
+  "batch_size": 40,
+  "learning_rate": 0.002,
+  "eval_examples": 200,
+  "training_examples_seen_per_model": 4800,
+  "held_out_seed": 10042,
+  "vision": "VisionConfig { image_size: 32, patch_size: 4, in_channels: 3, hidden_size: 24, depth: 2, heads: 4, intermediate_size: 48, spatial_merge_size: 2, projection_intermediate_size: 64, rms_norm_eps: 1e-5 }"
+ },
+ "environment": {
+  "burn": "0.23.0-pre.2",
+  "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+  "cpu": "Intel(R) Core(TM) i7-14700HX",
+  "cpu_cores": 28,
+  "glm53": "0.1.0",
+  "gpu": "NVIDIA GeForce RTX 5060 Laptop GPU, 615.78.08, 8151 MiB",
+  "os": "Fedora Linux 45 (Forty Five)",
+  "profile": "release",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)"
+ },
+ "results": [
+  {
+   "architecture": "faithful",
+   "parameter_count": 60924,
+   "visual_token_count": 16,
+   "inserted_token_count": 18,
+   "before": {
+    "accuracy": 0.0,
+    "loss": 5.61434268951416,
+    "correct": 0,
+    "examples": 200
+   },
+   "after": {
+    "accuracy": 0.735,
+    "loss": 0.9028617739677429,
+    "correct": 147,
+    "examples": 200
+   },
+   "final_training_loss": 0.944125771522522,
+   "wall_time_seconds": 8.758579735
+  },
+  {
+   "architecture": "direct_patch_baseline",
+   "parameter_count": 42500,
+   "visual_token_count": 16,
+   "inserted_token_count": 16,
+   "before": {
+    "accuracy": 0.0,
+    "loss": 5.576414108276367,
+    "correct": 0,
+    "examples": 200
+   },
+   "after": {
+    "accuracy": 0.865,
+    "loss": 0.9964694976806641,
+    "correct": 173,
+    "examples": 200
+   },
+   "final_training_loss": 1.0340120792388916,
+   "wall_time_seconds": 3.234216989
+  }
+ ],
+ "total_wall_time_seconds": 12.33114082,
+ "checkpoint_saved": false
+}

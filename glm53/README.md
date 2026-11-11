@@ -45,7 +45,7 @@ bytes -> embedding -> four residual streams
   that matters most: a subtly wrong gradient still produces a falling loss curve.
 - **Checkpoints round-trip**, both backends agree to 1e-4, and a fixed prompt is
   deterministic.
-- **44 tests** across the library and the integration suite.
+- **82 tests** across the library and the integration suite.
 
 ## Results
 
@@ -141,6 +141,60 @@ cargo run -p glm53 --release -- rl \
 final norm and the embedding (which is also the tied head): **2,190,152 of
 25,730,592 parameters** are trainable under RLOO.
 
+## Vision
+
+The image path is the reference's topology at teaching scale: RGB patches into two
+non-causal vision blocks, a 2x2 spatial merge, and a gated projector that emits
+language-model-width tokens. It appends ids 260/261/262, so it needs a 263-token
+vocabulary; the text model is untouched, and a test proves the shared logits are
+unchanged to 1e-5 after the vocabulary is widened.
+
+![Both image paths and the 25M pilot](../docs/vision.webp)
+
+At this scale the **direct-patch baseline wins**, 86.5% against 73.5% on held-out
+digits. That is what the reference reports too (189/200 against 119/200), and it is
+reported rather than tuned away: added structure did not pay for itself on a
+60k-parameter budget.
+
+The full-model pilot attaches the tower to the 25.7M language model and freezes
+everything except the vision tower, the last block, the final norm and the tied
+embedding — 2.3M of 25.7M parameters. It learns the digit task through a saturated
+coding model, but 40 steps plateaued at chance (10%) and 200 steps reached 32%.
+
+## The miniature studies
+
+Two matched studies over an arithmetic corpus (add/sub/mul/neg/abs), each with a
+~248k-parameter model, identical optimiser and step budget, and only the data
+presentation changing.
+
+![Data diversity and curriculum ordering](../docs/experiments.webp)
+
+| Study | Result |
+| --- | --- |
+| Data diversity, 8 to 88 structures | +2.0 points (95% CI +0.5 to +3.9), permutation p = 0.25, Holm p = 0.50 |
+| Blocked vs interleaved ordering | -10.3 points for blocked (95% CI -16.0 to -3.9), p = 0.25, Holm p = 0.50 |
+
+Three paired seeds cannot separate these arms, and the receipt says so. Both
+directions match the reference: more unique structures trend better, and blocked
+ordering is clearly the worst arm. Exact-expression accuracy was 0% in every arm,
+so this measures partial next-byte learning, not program generation.
+
+## RL variant screen
+
+Four arms from the same checkpoint, changing one design choice each: baseline
+(binary, penalty -0.1, T=0.35), low temperature (T=0.20), no invalid penalty, and
+case-fraction reward. Over 16 groups of 8 rollouts the baseline and the partial
+reward give the most signal (4/16 groups each), and low temperature gives the best
+result (dev 0.938 against 0.906). That reproduces the reference's direction without
+being powered to confirm it.
+
+## Receipts
+
+Every checkpoint directory carries `config.json`, `metadata.json` and a sha256 of
+its weights, and loading verifies the hash: a tampered file is a hard error.
+`system-receipt` captures the OS, CPU, GPU, driver, toolchain and model config that
+produced a result.
+
 ## Deviations from the reference
 
 - **The evaluator shells out to `python3`.** The reference validates with a
@@ -168,9 +222,18 @@ final norm and the embedding (which is also the tied head): **2,190,152 of
   That is what makes the parameter count match.
 - **The corpus generator is deterministic but not byte-identical.** Same eight
   families and prompt shape, a different PRNG.
-- **No vision path.** `vision.py` and `train_vision.py` are not ported; that is a
-  separate model path, not part of the language-model work. The reference's
-  pretraining ablations (`experiments/`) are likewise out of scope.
+- **Masked language-model loss is hand-rolled.** Burn's cross-entropy has no
+  `ignore_index`, so the mask is applied to a gathered log-probability and the mean
+  is taken over valid positions only.
+- **Placeholder replacement is a splice, not a scatter.** The reference scatters
+  visual embeddings into placeholder positions with `masked_scatter`; Burn has no
+  equivalent, and the image span is always contiguous, so the port concatenates
+  around it. Same result, no host round-trip.
+- **The vision and experiment runs use `flex`, not `wgpu`.** wgpu took 58 s for two
+  vision training steps where `flex` took 0.3 s: the tiny model presents many new
+  shapes and the JIT backend recompiles instead of reusing kernels.
+- **The arithmetic corpus and digit renderer use this crate's PRNG.** Same
+  distributions, different bytes.
 
 ## Performance notes
 

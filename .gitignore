@@ -4,3 +4,6 @@ artifacts
 docs/*.png
 *.rs.bk
 .DS_Store
+
+# Generated from docs/*.png by docs/make_plots.py; only the webp is committed.
+docs/*.png

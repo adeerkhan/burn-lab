@@ -1,0 +1,54 @@
+[
+ {
+  "arm": "baseline",
+  "groups": 16,
+  "groups_with_signal": 4,
+  "exact_rollouts": 100,
+  "rollouts": 128,
+  "temperature": 0.35,
+  "group_size": 8,
+  "reward_mode": "binary",
+  "invalid_penalty": -0.1,
+  "pass_at_one": 0.90625,
+  "seconds": 0.0
+ },
+ {
+  "arm": "low-temp",
+  "groups": 16,
+  "groups_with_signal": 2,
+  "exact_rollouts": 104,
+  "rollouts": 128,
+  "temperature": 0.2,
+  "group_size": 8,
+  "reward_mode": "binary",
+  "invalid_penalty": -0.1,
+  "pass_at_one": 0.9375,
+  "seconds": 0.0
+ },
+ {
+  "arm": "no-penalty",
+  "groups": 16,
+  "groups_with_signal": 1,
+  "exact_rollouts": 100,
+  "rollouts": 128,
+  "temperature": 0.35,
+  "group_size": 8,
+  "reward_mode": "binary",
+  "invalid_penalty": 0.0,
+  "pass_at_one": 0.90625,
+  "seconds": 0.0
+ },
+ {
+  "arm": "partial-reward",
+  "groups": 16,
+  "groups_with_signal": 4,
+  "exact_rollouts": 100,
+  "rollouts": 128,
+  "temperature": 0.35,
+  "group_size": 8,
+  "reward_mode": "case-fraction",
+  "invalid_penalty": -0.1,
+  "pass_at_one": 0.90625,
+  "seconds": 0.0
+ }
+]

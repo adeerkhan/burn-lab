@@ -47,8 +47,8 @@ fn main() {
     let mut same_fail = 0usize;
 
     println!(
-        "{:<24} {:<12} {:>5} {:>5}  {}",
-        "task", "family", "before", "after", "changed"
+        "{:<24} {:<12} {:>5} {:>5}  changed",
+        "task", "family", "before", "after"
     );
 
     for task in tasks::frozen_tasks(&split, per_family) {
@@ -83,7 +83,7 @@ fn main() {
         let changed = if before_completion != after_completion {
             "output"
         } else {
-            ""
+            "-"
         };
         println!(
             "{:<24} {:<12} {:>5} {:>5}  {}",

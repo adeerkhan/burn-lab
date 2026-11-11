@@ -4,13 +4,17 @@ use std::time::Instant;
 
 use burn::{prelude::*, store::ModuleRecord, tensor::Device};
 use glm53::{
-    GLM53Flash, ModelConfig,
+    GLM53Flash, ModelConfig, analysis,
     evaluation::{GreedyConfig, SampledConfig, pass_at_k, pass_at_one},
+    experiments::{self, StudyConfig, write_report as write_study},
     generate::{Decoding, GroupConfig, generate_raw},
     metrics::{PeakMemory, describe},
+    receipt,
     rl::{RewardMode, RlConfig, TrainScope, run_rl},
     tasks,
     training::{TrainConfig, list_checkpoints, train},
+    vision_pilot::{PilotConfig, run_pilot, write_report as write_pilot_report},
+    vision_train::{Architecture, VisionTrainConfig, train_vision, write_report},
 };
 
 const USAGE: &str = "\
@@ -28,6 +32,12 @@ COMMANDS:
     rl              RLOO post-training with executable reward
     generate        Sample a completion for a prompt
     tasks           Print tasks from a split
+    vision          Train and compare the two image paths on RGB digits
+    vision-pilot    Attach the vision tower to the full 25.7M language model
+    experiment      Run a matched miniature pretraining study
+    rl-screen       Run several RLOO variants from the same checkpoint
+    analyze         Apply paired statistics to a study receipt
+    system-receipt  Capture the runtime and hardware that produced a result
 
 OPTIONS:
     --backend <NAME>        wgpu | flex                        (default: wgpu)
@@ -44,6 +54,13 @@ OPTIONS:
     --per-family <N>        Tasks per family                   (default: 4)
     --families <LIST>       Restrict to families, comma separated
     --json <PATH>           Write the full report as JSON
+    --architecture <A>      vision: faithful | baseline | both (default: both)
+    --smoke-test            Cap a vision run at 40 steps, batch 20, 100 examples
+    --study <S>             experiment: diversity | curriculum  (default: diversity)
+    --diversities <LIST>    Diversity arms                       (default: 8,32,88)
+    --conditions <LIST>     Curriculum conditions                (default: all three)
+    --seeds <LIST>          Paired seeds                         (default: 11,22,33)
+    --study-json <PATH>     analyze: a study receipt to read
     --samples <N>           Samples per task for pass@k        (default: 8)
     --temperature <F>       Sampling temperature, 0 = greedy   (default: 0)
     --max-new <N>           Max new bytes                      (default: 48)
@@ -74,6 +91,13 @@ struct Options {
     per_family: usize,
     families: Vec<String>,
     json: String,
+    architecture: String,
+    smoke: bool,
+    study: String,
+    diversities: String,
+    conditions: String,
+    study_json: String,
+    seeds: String,
     samples: usize,
     temperature: f64,
     max_new: usize,
@@ -106,6 +130,13 @@ impl Default for Options {
             per_family: 4,
             families: Vec::new(),
             json: String::new(),
+            architecture: "both".to_string(),
+            smoke: false,
+            study: "diversity".to_string(),
+            diversities: "8,32,88".to_string(),
+            conditions: "curriculum-8-to-88,diverse-interleaved,diverse-blocked".to_string(),
+            study_json: String::new(),
+            seeds: "11,22,33".to_string(),
             samples: 8,
             temperature: 0.0,
             max_new: 48,
@@ -166,6 +197,16 @@ impl Options {
                     options.per_family = value(&mut index).parse().expect("invalid --per-family")
                 }
                 "--json" => options.json = value(&mut index),
+                "--architecture" => options.architecture = value(&mut index),
+                "--study" => options.study = value(&mut index),
+                "--diversities" => options.diversities = value(&mut index),
+                "--conditions" => options.conditions = value(&mut index),
+                "--seeds" => options.seeds = value(&mut index),
+                "--study-json" => options.study_json = value(&mut index),
+                "--smoke-test" => {
+                    options.smoke = true;
+                    continue;
+                }
                 "--families" => {
                     options.families = value(&mut index)
                         .split(',')
@@ -542,6 +583,331 @@ fn main() {
                 &device,
             );
             println!("--- completion ---\n{completion}");
+        }
+        "vision" => {
+            let mut config = VisionTrainConfig {
+                steps: options.steps,
+                batch_size: options.batch_size,
+                learning_rate: options.learning_rate.unwrap_or(2e-3),
+                eval_examples: options.per_family * 50,
+                seed: 42,
+                noise: 0.06,
+            };
+            if options.smoke {
+                config.steps = config.steps.min(40);
+                config.batch_size = config.batch_size.min(20);
+                config.eval_examples = config.eval_examples.min(100);
+            }
+
+            let architectures = match options.architecture.as_str() {
+                "faithful" => vec![Architecture::Faithful],
+                "baseline" | "direct_patch_baseline" => vec![Architecture::DirectPatch],
+                "both" => vec![Architecture::Faithful, Architecture::DirectPatch],
+                other => panic!("unknown architecture `{other}`"),
+            };
+
+            let device = options.device().autodiff();
+            println!(
+                "Vision comparison: {} architecture(s), {} steps, batch {}, lr {}, {} held-out examples",
+                architectures.len(),
+                config.steps,
+                config.batch_size,
+                config.learning_rate,
+                config.eval_examples
+            );
+
+            let report = train_vision(&architectures, &config, &device, &mut |name, step, loss| {
+                println!("  {name:<22} step {step:>3}  loss {loss:.4}");
+            });
+
+            println!(
+                "\n{:<24} {:>8} {:>9} {:>9} {:>7}",
+                "architecture", "before", "after", "params", "tokens"
+            );
+            for result in &report.results {
+                println!(
+                    "{:<24} {:>7.1}% {:>8.1}% {:>9} {:>7}",
+                    result.architecture,
+                    result.before.accuracy * 100.0,
+                    result.after.accuracy * 100.0,
+                    result.parameter_count,
+                    result.visual_token_count
+                );
+            }
+            println!("\ntotal {:.1}s", report.total_wall_time_seconds);
+
+            if !options.json.is_empty() {
+                write_report(&options.json, &report);
+                println!("wrote {}", options.json);
+            }
+        }
+        "rl-screen" => {
+            let base = options.checkpoint_dir();
+            let dev_tasks = options.tasks("dev");
+            let rl_tasks = options.tasks("rl");
+
+            let preset: Vec<(&str, RewardMode, f64, f64, usize)> = vec![
+                ("baseline", RewardMode::Binary, -0.1, 0.35, 8),
+                ("low-temp", RewardMode::Binary, -0.1, 0.20, 8),
+                ("no-penalty", RewardMode::Binary, 0.0, 0.35, 8),
+                ("partial-reward", RewardMode::CaseFraction, -0.1, 0.35, 8),
+            ];
+
+            let arms: Vec<(String, RlConfig)> = preset
+                .into_iter()
+                .map(|(name, mode, penalty, temperature, group_size)| {
+                    (
+                        name.to_string(),
+                        RlConfig {
+                            groups: options.groups,
+                            group_size,
+                            temperature,
+                            reward_mode: mode,
+                            invalid_penalty: penalty,
+                            tasks_per_family: options.tasks_per_family,
+                            learning_rate: options.learning_rate.unwrap_or(5e-5),
+                            artifact_dir: format!("{}/{name}", options.out),
+                            checkpoints: Vec::new(),
+                            ..RlConfig::default()
+                        },
+                    )
+                })
+                .collect();
+
+            let device = options.device().autodiff();
+            println!(
+                "RL variant screen: {} arms x {} groups x {} rollouts from {base}",
+                arms.len(),
+                options.groups,
+                8
+            );
+
+            let started = Instant::now();
+            let results = glm53::rl::screen(
+                &base,
+                &arms,
+                &rl_tasks,
+                &dev_tasks,
+                &device,
+                |result| {
+                    println!(
+                        "  {:<15} signal {:>2}/{}  exact {:>3}/{}  T={:.2}  penalty {:+.1}  {}  dev {:.3}",
+                        result.arm,
+                        result.groups_with_signal,
+                        result.groups,
+                        result.exact_rollouts,
+                        result.rollouts,
+                        result.temperature,
+                        result.invalid_penalty,
+                        result.reward_mode,
+                        result.pass_at_one.unwrap_or(0.0)
+                    );
+                },
+            );
+
+            println!("\ntotal {:.1}s", started.elapsed().as_secs_f64());
+            if !options.json.is_empty() {
+                if let Some(parent) = std::path::Path::new(&options.json).parent() {
+                    std::fs::create_dir_all(parent).ok();
+                }
+                std::fs::write(
+                    &options.json,
+                    serde_json::to_string_pretty(&results).expect("serialise") + "\n",
+                )
+                .expect("write the screen");
+                println!("wrote {}", options.json);
+            }
+        }
+        "experiment" => {
+            let config = StudyConfig {
+                steps: options.steps,
+                batch_size: options.batch_size,
+                learning_rate: options.learning_rate.unwrap_or(8e-4),
+                sequence_length: options.seq_len,
+                seeds: options
+                    .seeds
+                    .split(',')
+                    .filter(|part| !part.trim().is_empty())
+                    .map(|part| part.trim().parse().expect("invalid --seeds"))
+                    .collect(),
+            };
+            let device = options.device();
+
+            let report = match options.study.as_str() {
+                "diversity" => {
+                    let arms: Vec<usize> = options
+                        .diversities
+                        .split(',')
+                        .filter(|part| !part.trim().is_empty())
+                        .map(|part| part.trim().parse().expect("invalid --diversities"))
+                        .collect();
+                    println!(
+                        "Data diversity: {:?} structures x {} seeds, {} steps x batch {}",
+                        arms,
+                        config.seeds.len(),
+                        config.steps,
+                        config.batch_size
+                    );
+                    let report = experiments::data_diversity(&arms, &config, &device);
+                    for run in &report.runs {
+                        println!(
+                            "  {:<14} seed {:>3}  byte acc {:.3}  exact {:.3}  {:.1}s",
+                            run.arm,
+                            run.seed,
+                            run.after.target_byte_accuracy,
+                            run.after.target_exact_accuracy,
+                            run.elapsed_seconds
+                        );
+                    }
+                    report
+                }
+                "curriculum" => {
+                    let conditions: Vec<String> = options
+                        .conditions
+                        .split(',')
+                        .filter(|part| !part.trim().is_empty())
+                        .map(|part| part.trim().to_string())
+                        .collect();
+                    println!(
+                        "Curriculum and ordering: {} conditions x {} seeds, {} steps x batch {}",
+                        conditions.len(),
+                        config.seeds.len(),
+                        config.steps,
+                        config.batch_size
+                    );
+                    let report = experiments::curriculum_order(&conditions, &config, &device);
+                    for run in &report.runs {
+                        println!(
+                            "  {:<22} seed {:>3}  byte acc {:.3}  exact {:.3}  {:.1}s",
+                            run.arm,
+                            run.seed,
+                            run.after.target_byte_accuracy,
+                            run.after.target_exact_accuracy,
+                            run.elapsed_seconds
+                        );
+                    }
+                    report
+                }
+                other => panic!("unknown study `{other}`"),
+            };
+
+            println!("total {:.1}s", report.elapsed_seconds);
+            if !options.json.is_empty() {
+                write_study(&options.json, &report).expect("write the study receipt");
+                println!("wrote {}", options.json);
+            }
+        }
+        "analyze" => {
+            assert!(
+                !options.study_json.is_empty(),
+                "--study-json is required by `analyze`"
+            );
+            let text = std::fs::read_to_string(&options.study_json)
+                .unwrap_or_else(|error| panic!("could not read {}: {error}", options.study_json));
+            let report: experiments::StudyReport =
+                serde_json::from_str(&text).expect("parse the study receipt");
+            let analysis = analysis::analyze(&report);
+
+            println!("{}", analysis.research_question);
+            println!(
+                "\n{:<22} {:>8} {:>8} {:>8}",
+                "arm", "byte acc", "exact", "sd"
+            );
+            for arm in &analysis.arms {
+                println!(
+                    "{:<22} {:>8.3} {:>8.3} {:>8.3}",
+                    arm.arm, arm.mean_byte_accuracy, arm.mean_exact_accuracy, arm.std_byte_accuracy
+                );
+            }
+            if !analysis.comparisons.is_empty() {
+                println!(
+                    "\n{:<22} {:>10} {:>18} {:>10} {:>10}",
+                    "vs reference", "mean diff", "95% CI", "p", "Holm p"
+                );
+                for comparison in &analysis.comparisons {
+                    println!(
+                        "{:<22} {:>+10.4} {:>8.4}..{:<8.4} {:>10.4} {:>10.4}",
+                        comparison.arm,
+                        comparison.mean_difference,
+                        comparison.ci_low,
+                        comparison.ci_high,
+                        comparison.permutation_p,
+                        comparison.adjusted_p
+                    );
+                }
+            }
+
+            let json = if options.json.is_empty() {
+                "artifacts/analysis.json".to_string()
+            } else {
+                options.json.clone()
+            };
+            if let Some(parent) = std::path::Path::new(&json).parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            std::fs::write(
+                &json,
+                serde_json::to_string_pretty(&analysis).expect("serialise") + "\n",
+            )
+            .expect("write the analysis");
+            println!("\nwrote {json}");
+        }
+        "vision-pilot" => {
+            let checkpoint = options.checkpoint_dir();
+            let config = PilotConfig {
+                steps: options.steps,
+                batch_size: options.batch_size.min(10),
+                learning_rate: options.learning_rate.unwrap_or(1e-3),
+                eval_examples: 100,
+                seed: 73,
+                max_seconds: Some(540.0),
+            };
+            let device = options.device().autodiff();
+
+            println!(
+                "Vision pilot on {checkpoint}: {} steps, batch {}, lr {}",
+                config.steps, config.batch_size, config.learning_rate
+            );
+            let report = run_pilot(&checkpoint, &config, &device, &mut |step, loss| {
+                println!("  step {step:>3}  loss {loss:.4}");
+            })
+            .unwrap_or_else(|error| panic!("the pilot failed: {error}"));
+
+            println!(
+                "\nheld-out accuracy {:.1}% -> {:.1}%   loss {:.3} -> {:.3}",
+                report.before.accuracy * 100.0,
+                report.after.accuracy * 100.0,
+                report.before.loss,
+                report.after.loss
+            );
+            println!(
+                "trainable {} of {} (vision {}), {} steps, {:.1}s, weights saved: {}",
+                report.trainable_parameters,
+                report.language_parameters,
+                report.visual_parameters,
+                report.steps_completed,
+                report.wall_time_seconds,
+                report.weights_saved
+            );
+
+            if !options.json.is_empty() {
+                write_pilot_report(&options.json, &report).expect("write the pilot receipt");
+                println!("wrote {}", options.json);
+            }
+        }
+        "system-receipt" => {
+            let receipt = receipt::system_receipt();
+            let text = serde_json::to_string_pretty(&receipt).expect("serialise");
+            match options.json.is_empty() {
+                true => println!("{text}"),
+                false => {
+                    if let Some(parent) = std::path::Path::new(&options.json).parent() {
+                        std::fs::create_dir_all(parent).ok();
+                    }
+                    std::fs::write(&options.json, text + "\n").expect("write the system receipt");
+                    println!("wrote {}", options.json);
+                }
+            }
         }
         "tasks" => {
             for task in options.tasks(&options.split) {

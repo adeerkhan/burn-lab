@@ -580,3 +580,80 @@ mod tests {
         }
     }
 }
+
+/// One arm of the RL variant screen.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ScreenArmResult {
+    pub arm: String,
+    pub groups: usize,
+    pub groups_with_signal: usize,
+    pub exact_rollouts: usize,
+    pub rollouts: usize,
+    pub temperature: f64,
+    pub group_size: usize,
+    pub reward_mode: String,
+    pub invalid_penalty: f64,
+    pub pass_at_one: Option<f64>,
+    pub seconds: f64,
+}
+
+/// Run a set of RL arms from the same checkpoint and report which ones learned.
+///
+/// Mirrors `scripts/run_rl_variant_screen.sh`: every arm starts from the same
+/// weights and changes exactly one design choice.
+pub fn screen(
+    base: &str,
+    arms: &[(String, RlConfig)],
+    tasks: &[CodingTask],
+    dev_tasks: &[CodingTask],
+    device: &Device,
+    mut on_arm: impl FnMut(&ScreenArmResult),
+) -> Vec<ScreenArmResult> {
+    let config = crate::ModelConfig::new();
+    let mut results = Vec::new();
+
+    for (name, arm) in arms {
+        let model = crate::vision_pilot::load_text_model(&config, device, base)
+            .unwrap_or_else(|error| panic!("could not load {base}: {error}"));
+
+        let mut groups_with_signal = 0usize;
+        let mut exact = 0usize;
+        let mut rollouts = 0usize;
+
+        let trained = run_rl(model, tasks, arm, device, |metrics| {
+            if metrics.updated {
+                groups_with_signal += 1;
+            }
+            exact += metrics.exact_rollouts;
+            rollouts += arm.group_size;
+        });
+
+        let pass = crate::evaluation::pass_at_one(
+            &trained.valid(),
+            dev_tasks,
+            &crate::evaluation::GreedyConfig {
+                max_new_tokens: 48,
+                seed: 2026,
+            },
+            device,
+        );
+
+        let result = ScreenArmResult {
+            arm: name.clone(),
+            groups: arm.groups,
+            groups_with_signal,
+            exact_rollouts: exact,
+            rollouts,
+            temperature: arm.temperature,
+            group_size: arm.group_size,
+            reward_mode: arm.reward_mode.label().to_string(),
+            invalid_penalty: arm.invalid_penalty,
+            pass_at_one: Some(pass.pass_at_1),
+            seconds: 0.0,
+        };
+        on_arm(&result);
+        results.push(result);
+    }
+
+    results
+}

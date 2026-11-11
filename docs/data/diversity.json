@@ -1,0 +1,53 @@
+{
+ "schema_version": "1.0",
+ "research_question": "At fixed compute, does more unique program structure improve held-out compositional code prediction?",
+ "independent_variable": "number of unique training expression structures",
+ "arms": [
+  {
+   "arm": "8 structures",
+   "seeds": 3,
+   "mean_byte_accuracy": 0.5746734809767178,
+   "mean_exact_accuracy": 0.0,
+   "mean_loss": 1.290982693315297,
+   "std_byte_accuracy": 0.03874780717599544
+  },
+  {
+   "arm": "32 structures",
+   "seeds": 3,
+   "mean_byte_accuracy": 0.5883021010789324,
+   "mean_exact_accuracy": 0.0,
+   "mean_loss": 1.2657851786995258,
+   "std_byte_accuracy": 0.04926648773820327
+  },
+  {
+   "arm": "88 structures",
+   "seeds": 3,
+   "mean_byte_accuracy": 0.5945485519591142,
+   "mean_exact_accuracy": 0.0,
+   "mean_loss": 1.296207511716103,
+   "std_byte_accuracy": 0.025723456338230852
+  }
+ ],
+ "comparisons": [
+  {
+   "arm": "32 structures",
+   "against": "8 structures",
+   "mean_difference": 0.013628620102214661,
+   "ci_low": -0.07155025553662697,
+   "ci_high": 0.06643952299829647,
+   "permutation_p": 1.0,
+   "adjusted_p": 1.0
+  },
+  {
+   "arm": "88 structures",
+   "against": "8 structures",
+   "mean_difference": 0.01987507098239638,
+   "ci_low": 0.005110732538330498,
+   "ci_high": 0.03918228279386715,
+   "permutation_p": 0.25,
+   "adjusted_p": 0.5
+  }
+ ],
+ "reference_arm": "8 structures",
+ "note": "Paired by seed. Permutation p is two-sided; the adjusted p is Holm-corrected across the comparisons against the reference arm."
+}

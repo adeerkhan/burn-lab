@@ -61,6 +61,15 @@ impl GLM53Flash {
         &self.config
     }
 
+    /// Embed token ids without running the blocks.
+    ///
+    /// # Shapes
+    ///   - Input `[batch, time]`
+    ///   - Embeddings `[batch, time, dim]`
+    pub fn embed(&self, input_ids: Tensor<2, Int>) -> Tensor<3> {
+        self.embedding.forward(input_ids)
+    }
+
     /// Run the model over token ids.
     ///
     /// # Shapes

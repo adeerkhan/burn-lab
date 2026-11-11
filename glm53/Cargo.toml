@@ -16,6 +16,7 @@ burn = { version = "=0.23.0-pre.2", features = [
 # The evaluator speaks JSON to a python3 subprocess.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 
 [lints.clippy]
 # The `Config` derive expands to redundant field names.

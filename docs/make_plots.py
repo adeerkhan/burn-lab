@@ -660,11 +660,141 @@ def capability_band() -> None:
     image.save(ROOT / "band.png")
 
 
+
+def vision_chart() -> None:
+    """Both image paths, before and after training."""
+    vision = _load("vision")
+    pilot = _load("vision-pilot")
+
+    width, height = 2000, 780
+    image, draw = canvas(width, height)
+    draw.text((60, 40), "The direct-patch baseline wins at this scale", font=font(38, True), fill=INK)
+    draw.text(
+        (62, 96),
+        "held-out seven-segment digits, 120 steps, 200 examples; chance is 10%",
+        font=font(21),
+        fill=MUTED,
+    )
+
+    left, right, top, bottom = 150, 1180, 210, 620
+    draw.rectangle((left, top, right, bottom), fill=PANEL)
+    for tick in (0.0, 0.25, 0.5, 0.75, 1.0):
+        yy = bottom - tick * (bottom - top)
+        draw.line((left, yy, right, yy), fill=GRID, width=1)
+        draw.text((left - 66, yy - 11), f"{tick:.0%}", font=font(17), fill=MUTED)
+
+    labels = ["faithful\n(patch + 2 blocks + merge)", "direct-patch\n(baseline)"]
+    values = [r["after"]["accuracy"] for r in vision["results"]]
+    slot = (right - left) / len(values)
+    bar = 120
+    for index, (label, value) in enumerate(zip(labels, values)):
+        cx = left + slot * (index + 0.5)
+        top_y = bottom - value * (bottom - top)
+        colour = ORANGE if value == max(values) else (166, 173, 184)
+        draw.rounded_rectangle((cx - bar / 2, top_y, cx + bar / 2, bottom), radius=9, fill=colour)
+        centred(draw, (cx - bar / 2, top_y - 34, cx + bar / 2, top_y - 6), f"{value:.1%}", font(21, True), INK)
+        for offset, line in enumerate(label.split("\n")):
+            centred(draw, (cx - slot / 2, bottom + 14 + offset * 24, cx + slot / 2, bottom + 38 + offset * 24), line, font(16), MUTED)
+
+    # Pilot panel.
+    left, right = 1330, 1940
+    draw.text((left, top - 46), "25.7M language model + vision", font=font(20, True), fill=INK)
+    draw.rectangle((left, top, right, bottom), fill=PANEL)
+    for tick in (0.0, 0.25, 0.5, 0.75, 1.0):
+        yy = bottom - tick * (bottom - top)
+        draw.line((left, yy, right, yy), fill=GRID, width=1)
+        draw.text((left - 66, yy - 11), f"{tick:.0%}", font=font(17), fill=MUTED)
+    pairs = [("before", pilot["before"]["accuracy"], (166, 173, 184)), ("after 200 steps", pilot["after"]["accuracy"], ORANGE)]
+    slot = (right - left) / len(pairs)
+    for index, (label, value, colour) in enumerate(pairs):
+        cx = left + slot * (index + 0.5)
+        top_y = bottom - value * (bottom - top)
+        draw.rounded_rectangle((cx - 70, top_y, cx + 70, bottom), radius=9, fill=colour)
+        centred(draw, (cx - 70, top_y - 34, cx + 70, top_y - 6), f"{value:.1%}", font(21, True), INK)
+        centred(draw, (cx - slot / 2, bottom + 14, cx + slot / 2, bottom + 38), label, font(17), MUTED)
+
+    draw.text(
+        (60, height - 52),
+        "2.3M of 25.7M parameters trainable; the tower learns through a frozen coding model.",
+        font=font(20, True),
+        fill=INK,
+    )
+    image.save(ROOT / "vision.png")
+
+
+def experiments_chart() -> None:
+    """The two miniature studies, with seed dots."""
+    import json
+
+    diversity = _load("diversity")
+    curriculum = _load("curriculum")
+
+    width, height = 2200, 880
+    image, draw = canvas(width, height)
+    draw.text((60, 36), "Two matched miniature studies", font=font(38, True), fill=INK)
+    draw.text(
+        (62, 92),
+        "same model, optimiser, steps and batch; only the data presentation changes",
+        font=font(21),
+        fill=MUTED,
+    )
+
+    panels = [
+        (70, 1080, "Data diversity", diversity, "structures"),
+        (1180, 2130, "Curriculum and ordering", curriculum, "conditions"),
+    ]
+    top, bottom = 200, 690
+
+    for left, right, title, analysis, unit in panels:
+        draw.text((left, top - 44), title, font=font(23, True), fill=INK)
+        draw.rectangle((left, top, right, bottom), fill=PANEL)
+        for tick in (0.0, 0.25, 0.5, 0.75, 1.0):
+            yy = bottom - tick * (bottom - top)
+            draw.line((left, yy, right, yy), fill=GRID, width=1)
+            draw.text((left - 62, yy - 11), f"{tick:.0%}", font=font(16), fill=MUTED)
+
+        arms = analysis["arms"]
+        slot = (right - left) / len(arms)
+        for index, arm in enumerate(arms):
+            cx = left + slot * (index + 0.5)
+            value = arm["mean_byte_accuracy"]
+            top_y = bottom - value * (bottom - top)
+            colour = ORANGE if value == max(a["mean_byte_accuracy"] for a in arms) else (166, 173, 184)
+            draw.rounded_rectangle((cx - 52, top_y, cx + 52, bottom), radius=8, fill=colour)
+            centred(draw, (cx - 52, top_y - 30, cx + 52, top_y - 6), f"{value:.1%}", font(18, True), INK)
+            if unit == "conditions":
+                name = {
+                    "curriculum-8-to-88": "curriculum\n8 to 88",
+                    "diverse-interleaved": "interleaved",
+                    "diverse-blocked": "blocked",
+                }.get(arm["arm"], arm["arm"])
+            else:
+                name = arm["arm"].replace(" structures", "\nstructures")
+            for offset, line in enumerate(name.split("\n")):
+                centred(draw, (cx - slot / 2, bottom + 12 + offset * 22, cx + slot / 2, bottom + 34 + offset * 22), line, font(15), MUTED)
+
+    draw.text(
+        (60, height - 84),
+        "More unique structures trend better (+2.0 pts, CI 0.5-3.9) but 3 seeds cannot separate them;",
+        font=font(19),
+        fill=INK,
+    )
+    draw.text(
+        (60, height - 54),
+        "blocked ordering is clearly the worst arm (-10.3 pts), the same direction the reference reports.",
+        font=font(19),
+        fill=INK,
+    )
+    image.save(ROOT / "experiments.png")
+
+
 if __name__ == "__main__":
     ROOT.mkdir(parents=True, exist_ok=True)
     comparison()
     families_chart()
     generation_card()
     capability_band()
-    for name in ("comparison", "families", "generation", "band"):
+    vision_chart()
+    experiments_chart()
+    for name in ("comparison", "families", "generation", "band", "vision", "experiments"):
         print("wrote", ROOT / f"{name}.png")

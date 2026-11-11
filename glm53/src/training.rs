@@ -3,8 +3,6 @@
 //! This does not use Burn's `Learner`, because the reference's training loop is
 //! a plain optimizer step over a byte-level language-model loss.
 
-use std::path::Path;
-
 use burn::{
     data::dataloader::batcher::Batcher,
     nn::loss::CrossEntropyLossConfig,
@@ -12,9 +10,12 @@ use burn::{
     prelude::*,
 };
 
+use std::collections::BTreeMap;
+
 use crate::{
     data::{ByteBatcher, Corpus, Document},
     model::GLM53Flash,
+    receipt,
     tasks::Rng,
 };
 
@@ -121,13 +122,24 @@ pub fn train(
     model
 }
 
-/// Write `<dir>/checkpoint-<step>/model` plus the model config.
+/// Write `<dir>/checkpoint-<step>/` with weights, config and a receipt.
 pub fn save_checkpoint(model: &GLM53Flash, directory: Option<&str>, step: usize) {
+    save_checkpoint_staged(model, directory, step, "pretrain", BTreeMap::new());
+}
+
+/// Write a checkpoint tagged with the stage that produced it.
+pub fn save_checkpoint_staged(
+    model: &GLM53Flash,
+    directory: Option<&str>,
+    step: usize,
+    stage: &str,
+    notes: BTreeMap<String, String>,
+) {
     let Some(directory) = directory else {
         return;
     };
-    let path = Path::new(directory).join(format!("checkpoint-{step:04}"));
-    std::fs::create_dir_all(&path).expect("create the checkpoint directory");
+    let path = receipt::checkpoint_path(directory, step);
+    receipt::prepare(&path).expect("create the checkpoint directory");
 
     model
         .valid()
@@ -141,6 +153,8 @@ pub fn save_checkpoint(model: &GLM53Flash, directory: Option<&str>, step: usize)
         .clone()
         .save(path.join("config.json"))
         .expect("save the model config");
+
+    receipt::write_receipt(&path, stage, step, notes).expect("write the checkpoint receipt");
 }
 
 /// List the checkpoint directories under `root`, oldest step first.

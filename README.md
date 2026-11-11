@@ -5,7 +5,7 @@
   ![Rust](https://img.shields.io/badge/Rust-1.95%2B-f15a24?style=flat-square&logo=rust&logoColor=white)
   ![Burn](https://img.shields.io/badge/Burn-0.23.0--pre.2-f15a24?style=flat-square)
   ![License](https://img.shields.io/badge/License-MIT-f15a24?style=flat-square)
-  ![Tests](https://img.shields.io/badge/tests-44%20passing-f15a24?style=flat-square)
+  ![Tests](https://img.shields.io/badge/tests-82%20passing-f15a24?style=flat-square)
 
   <p><b>A 25.7M-parameter language model — hybrid attention, sparse mixture of experts, four residual
   streams — pretrained from scratch and post-trained with executable-reward RL, all in Burn.</b></p>
@@ -75,6 +75,23 @@ The clearest single illustration. On dev, RL repaired a syntax error (`text[:::-
 On confirm, it broke working code (`text[::-1]` → `text[:-1]`). Same model, same verifier, opposite
 directions.
 
+### Vision and the miniature studies
+
+![Both image paths and the 25M pilot](docs/vision.webp)
+
+The vision path is ported module for module. At this scale the **direct-patch
+baseline beats the faithful encoder**, 86.5% against 73.5% — the same outcome the
+reference reports (189/200 against 119/200). The 25.7M pilot learns the digit task
+through a saturated coding model but needs 200 steps, not the reference's 40.
+
+![Data diversity and curriculum ordering](docs/experiments.webp)
+
+Two matched studies over an arithmetic corpus, three paired seeds each. More unique
+structures trend better (+2.0 points, 95% CI +0.5 to +3.9) and blocked ordering is
+clearly worst (−10.3 points), both in the reference's direction — but with three
+seeds the Holm-corrected p-values are 0.50, so neither is confirmed. Exact-expression
+accuracy was 0% throughout.
+
 ### Why our result differs from the reference's
 
 The reference reports confirm greedy going **0/24 → 16/24**. Ours went 29/32 → 27/32. We ran two
@@ -142,7 +159,7 @@ are both right.
 ```sh
 git clone https://github.com/adeerkhan/burn-lab
 cd burn-lab
-cargo test --workspace --release          # 44 tests
+cargo test --workspace --release          # 82 tests
 cargo run -p glm53 --release -- params    # parameter counts
 ```
 
@@ -226,26 +243,23 @@ burn-lab/
 
 ### How complete is this
 
-The language-model half is complete and verified. The vision path and the research scripts are not
-ported, and this README says so rather than implying otherwise.
+Everything in the reference is ported: the language model, the vision path, the
+evaluator, the RL stage, the two miniature pretraining studies, the analyzers and
+the receipts.
 
 | Reference | Status |
 | --- | --- |
-| `glm53_flash/model.py` | ported — `attention.rs`, `moe.rs`, `block.rs`, `model.rs`. Counts match to the digit. |
-| `tokenizer.py`, `tasks.py` | ported |
-| `evaluator.py` | ported — Rust driver, embedded `python3` harness, same allowlist semantics |
-| `runtime.py` | partial — `generate_group` and checkpoint I/O are ported; sha256 receipts are not |
+| `model.py`, `tokenizer.py`, `tasks.py` | ported — counts match to the digit |
+| `evaluator.py` | ported — Rust driver, embedded `python3` harness, same allowlist |
+| `runtime.py` | ported — `generate_group` plus checkpoint receipts with sha256 |
+| `vision.py`, `train_vision.py` | ported — faithful tower and labelled baseline |
+| `full_25m_vision_digit_pilot.py` | ported |
 | `train_pretrain.py`, `train_rl.py` | ported |
 | `evaluate.py`, `evaluate_passk.py` | ported, with `--json` receipts |
-| `vision.py`, `train_vision.py` | **not ported** |
-| `experiments/*` (5 scripts) | **not ported** — data diversity, ordering, curriculum |
-| `analyze_*.py` (3 scripts) | **not ported** — McNemar, bootstrap, Holm correction |
-| `system_receipt.py` | **not ported** |
-| `tests/` | replaced — 44 Rust tests, including a gradient check the reference does not have |
-
-By line count: 4,045 lines of Rust for the model, training, evaluation and RL, against 980 lines of
-reference model code — but 2,853 lines of the reference's analysis and experiment scripts have no
-counterpart here.
+| `experiments/*` (5) | ported — diversity and curriculum/ordering |
+| `analyze_*.py`, `system_receipt.py` | ported — McNemar, permutation, bootstrap, Holm |
+| `run_rl_variant_screen.sh` | ported as `rl-screen` |
+| `tests/` | replaced — 82 Rust tests |
 
 ### What matches the reference
 
@@ -329,7 +343,7 @@ RTX 5060 Laptop (Vulkan through wgpu versus CUDA), 28-core CPU, PyTorch
   where a `Tensor<3>` belongs fails the build. Device mismatches are a clear
   runtime panic rather than a silent cross-device copy — which is how one bug in
   this very port was caught.
-- **`cargo test` runs 44 tests in about half a second** once built, including a
+- **`cargo test` runs 82 tests in about a second** once built, including a
   numerical gradient check.
 
 ## What we learned about Burn
@@ -381,7 +395,7 @@ discipline that preserves every rollout and checkpoint hash.
 ## Tests
 
 ```sh
-cargo test -p glm53 --release                                                  # 44 tests
+cargo test -p glm53 --release                                                  # 82 tests
 GLM53_WGPU_TEST=1 cargo test -p glm53 --release --test model_checks backends_agree
 ```
 

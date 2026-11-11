@@ -1,0 +1,53 @@
+{
+ "schema_version": "1.0",
+ "research_question": "At fixed compute and identical examples, does the order of presentation change held-out performance?",
+ "independent_variable": "example ordering and curriculum schedule",
+ "arms": [
+  {
+   "arm": "curriculum-8-to-88",
+   "seeds": 3,
+   "mean_byte_accuracy": 0.596252129471891,
+   "mean_exact_accuracy": 0.0,
+   "mean_loss": 1.2509662046275445,
+   "std_byte_accuracy": 0.03316511470857206
+  },
+  {
+   "arm": "diverse-interleaved",
+   "seeds": 3,
+   "mean_byte_accuracy": 0.5843270868824532,
+   "mean_exact_accuracy": 0.0,
+   "mean_loss": 1.2570883041075318,
+   "std_byte_accuracy": 0.034199079897589
+  },
+  {
+   "arm": "diverse-blocked",
+   "seeds": 3,
+   "mean_byte_accuracy": 0.4929017603634298,
+   "mean_exact_accuracy": 0.0,
+   "mean_loss": 1.6214424176083446,
+   "std_byte_accuracy": 0.029226823923810912
+  }
+ ],
+ "comparisons": [
+  {
+   "arm": "diverse-interleaved",
+   "against": "curriculum-8-to-88",
+   "mean_difference": -0.011925042589437829,
+   "ci_low": -0.05962521294718914,
+   "ci_high": 0.05792163543441231,
+   "permutation_p": 0.75,
+   "adjusted_p": 0.75
+  },
+  {
+   "arm": "diverse-blocked",
+   "against": "curriculum-8-to-88",
+   "mean_difference": -0.10335036910846114,
+   "ci_low": -0.16013628620102216,
+   "ci_high": -0.03918228279386715,
+   "permutation_p": 0.25,
+   "adjusted_p": 0.5
+  }
+ ],
+ "reference_arm": "curriculum-8-to-88",
+ "note": "Paired by seed. Permutation p is two-sided; the adjusted p is Holm-corrected across the comparisons against the reference arm."
+}
