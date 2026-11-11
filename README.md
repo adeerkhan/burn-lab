@@ -216,6 +216,7 @@ abstract.
 | Distribution | **134 MB** binary, 5 shared libraries | 6.8 GB virtualenv |
 | Cold start to a ready model | **~0.9 s** | ~1.6 s (`import torch` + build) |
 | Peak RSS, one generation | **385 MB** | 781 MB |
+| Forward, GPU, 1 x 192 (decode) | **22.2 ms** | 25.6 ms |
 | Forward, GPU, 16 x 128 | 57.7 ms · 35.5k tok/s | **43.7 ms · 46.8k tok/s** |
 | Forward, CPU, 16 x 128 | 1,070 ms · 1.9k tok/s | **315 ms · 6.5k tok/s** |
 
@@ -236,6 +237,9 @@ RTX 5060 Laptop (Vulkan through wgpu versus CUDA), 28-core CPU, PyTorch
   materially more arithmetic — the linear attention uses a masked contraction
   instead of a cumulative outer product, and the default MoE evaluates all eight
   experts instead of the two a token picks.
+- **At decode shape the port is slightly ahead** (22.2 ms against 25.6 ms at
+  batch 1). At that size per-call overhead matters more than throughput, and it
+  is the one shape where Burn comes out in front.
 - **CPU is the clear loss**, 3.4x slower on `flex`. A pure-Rust eager backend
   does not compete with decades of BLAS and oneDNN tuning, and nothing here
   claims it does.
