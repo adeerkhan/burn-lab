@@ -154,6 +154,7 @@ Burn's dashboard only renders when stdout is a terminal, so
 burn-lab/
 ├── src/                  # the MNIST lab (Burn Book basic workflow)
 ├── scripts/              # tmux helper for the TUI dashboard
+├── bench/                # forward-pass benchmark against the PyTorch reference
 ├── docs/                 # figures + the script that renders them
 └── glm53/                # the GLM-5.3-Flash port
     ├── python/           # evaluator harness (AST allowlist + test runner)
@@ -201,6 +202,57 @@ Nothing here is asserted without a check:
 - **A golden forward fixture** on a deterministic parameter pattern, so a rewiring refactor fails loudly.
 - **The linear attention** matches a direct transcription of the reference's cumulative-sum definition.
 - **Checkpoint round-trips** and the two backends agree to 1e-4.
+
+## Burn versus the Python stack
+
+Measured on one machine, same config, same shapes. This is a port of a specific
+reference, so the throughput lines compare *this port* with *that
+implementation* — including the port's own more expensive formulations (see
+[deviations](#where-it-deviates-and-why)), not Burn against PyTorch in the
+abstract.
+
+| | burn-lab | PyTorch reference |
+| --- | --- | --- |
+| Distribution | **134 MB** binary, 5 shared libraries | 6.8 GB virtualenv |
+| Cold start to a ready model | **~0.9 s** | ~1.6 s (`import torch` + build) |
+| Peak RSS, one generation | **385 MB** | 781 MB |
+| Forward, GPU, 16 x 128 | 57.7 ms · 35.5k tok/s | **43.7 ms · 46.8k tok/s** |
+| Forward, CPU, 16 x 128 | 1,070 ms · 1.9k tok/s | **315 ms · 6.5k tok/s** |
+
+RTX 5060 Laptop (Vulkan through wgpu versus CUDA), 28-core CPU, PyTorch
+2.11.0+cu128. Reproduce with `bench/pytorch_forward.py` and
+`cargo run -p glm53 --release --example bench_forward`.
+
+<details>
+<summary><b>What this says, and what it does not</b></summary>
+<br/>
+
+- **Deployment is not close.** A 134 MB self-contained binary against a 6.8 GB
+  virtualenv. The binary links `libc`, `libm`, `libgcc` and the loader — no
+  Python, no libtorch, no CUDA runtime.
+- **Startup favours Rust**, and the reason is mundane: the interpreter and 600 MB
+  of imports disappear. That is most of PyTorch's cold-start budget.
+- **GPU throughput is within 1.3x of PyTorch CUDA** despite the port doing
+  materially more arithmetic — the linear attention uses a masked contraction
+  instead of a cumulative outer product, and the default MoE evaluates all eight
+  experts instead of the two a token picks.
+- **CPU is the clear loss**, 3.4x slower on `flex`. A pure-Rust eager backend
+  does not compete with decades of BLAS and oneDNN tuning, and nothing here
+  claims it does.
+
+</details>
+
+### What is not a benchmark
+
+- **One artifact, no export step.** The reference trains in PyTorch and any real
+  deployment then exports to ONNX or a production engine. Here the code that
+  trains is the code that ships; a checkpoint is just weights.
+- **Ranks and tensor kinds are checked at compile time.** Passing a `Tensor<2>`
+  where a `Tensor<3>` belongs fails the build. Device mismatches are a clear
+  runtime panic rather than a silent cross-device copy — which is how one bug in
+  this very port was caught.
+- **`cargo test` runs 44 tests in about half a second** once built, including a
+  numerical gradient check.
 
 ## What we learned about Burn
 
