@@ -1,0 +1,24 @@
+[workspace]
+members = ["glm53"]
+resolver = "3"
+
+[package]
+name = "burn-lab"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Burn, pinned to the release this port was written against.
+burn = { version = "=0.23.0-pre.2", features = [
+    "flex",
+    "train",
+    "tui",
+    "vision",
+    "wgpu",
+] }
+
+[lints.clippy]
+# The `Config` derive expands to redundant field names.
+# Same workaround as the Burn workspace itself: rust-clippy#17525.
+redundant_field_names = "allow"
