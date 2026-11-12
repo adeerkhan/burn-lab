@@ -79,14 +79,13 @@ directions.
 
 ![Both image paths and the 25M pilot](docs/vision.webp)
 
-The vision path is ported module for module. At this scale the **direct-patch
-baseline beats the faithful encoder** in every seed: 87.5% against 56-76.5% over
-seeds 42, 7 and 13. Running the reference implementation itself reproduces us closely
-— faithful 112/200 (56.0%) against 187/200 (93.5%) — and our faithful tower also
-scores 112/200, so the two agree to the example. The magnitude is unstable though:
-the faithful tower's seed-to-seed sd is 8.5 points at width 24 and over 20 at larger
-widths, so a single seed cannot rank the architectures and the reference's one-seed
-comparison is one draw. The 25.7M pilot learns the digit task through a saturated coding
+The vision path is ported module for module. Over five seeds the **direct-patch
+baseline beats the faithful encoder** in every one: **92.7% ± 5.6** (95% CI 88.4-97.3)
+against **55.6% ± 17.6** (42.0-69.0) at width 24, and **48.7% ± 16.1** (34.5-59.4) at
+width 48. Running the reference implementation itself under the same seed reproduces
+our faithful tower to the example (see `docs/data/vision-comparison.json`). The
+faithful tower's sd is three times the baseline's, widening it makes it worse, and a
+single seed cannot rank the architectures. The 25.7M pilot learns the digit task through a saturated coding
 model but needs 200 steps, not the reference's 40.
 
 ![Data diversity and curriculum ordering](docs/experiments.webp)

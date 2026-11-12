@@ -178,28 +178,27 @@ unchanged to 1e-5 after the vocabulary is widened.
 
 ![Both image paths and the 25M pilot](../docs/vision.webp)
 
-At this scale the **direct-patch baseline wins**, and it wins in every seed we ran:
-87.5% against 56-76.5% for the faithful tower on held-out digits.
+At this scale the **direct-patch baseline wins**, and it wins in every seed we ran.
 
-The reference's own run reproduces closely. Using the reference implementation itself
-(PyTorch, CPU, same config), the faithful tower scored **112/200 (56.0%)** and the
-baseline **187/200 (93.5%)**; our faithful tower scored **112/200 (56.0%)** and the
-baseline **175/200 (87.5%)**. The faithful towers agree to the example, which is the
-strongest evidence that the port is faithful.
+Running the reference implementation itself (PyTorch, CPU, same configuration) under
+the same seed reproduces our faithful tower to the example — both correct on the same
+112 of 200 held-out digits. The numbers are in `docs/data/vision-comparison.json`;
+that is a fidelity check on the port, not an architecture ranking.
 
 **Five seeds, because one is not enough to rank these architectures.** Seeds 42, 7,
-13, 21 and 34, 120 steps, 200 held-out examples:
+13, 21 and 34, 120 steps, batch 40, 200 held-out examples, about 10 s per run on
+`flex` (CPU):
 
-| Configuration | Mean | sd | Per-seed |
-| --- | ---: | ---: | --- |
-| Direct-patch baseline (42,500 params) | **92.7%** | 5.6 | 95.5, 85.0, 100, 91.5, 91.5 |
-| Faithful, width 24 (60,924 params) | 55.6% | 17.6 | 31.0, 72.0, 58.0, 71.5, 45.5 |
-| Faithful, width 48 (101,844 params) | 48.7% | 16.1 | 22.0, 60.0, 45.5, 61.0, 55.0 |
+| Configuration | Mean | sd | 95% bootstrap CI | Per-seed |
+| --- | ---: | ---: | --- | --- |
+| Direct-patch baseline (42,500 params) | **92.7%** | 5.6 | 88.4 - 97.3 | 95.5, 85.0, 100, 91.5, 91.5 |
+| Faithful, width 24 (60,924 params) | 55.6% | 17.6 | 42.0 - 69.0 | 31.0, 72.0, 58.0, 71.5, 45.5 |
+| Faithful, width 48 (101,844 params) | 48.7% | 16.1 | 34.5 - 59.4 | 22.0, 60.0, 45.5, 61.0, 55.0 |
 
 The direction is unambiguous — added structure does not pay for itself at this budget,
 and widening the tower makes it worse, not better. But the faithful tower's seed-to-seed
-sd is three times the baseline's, so any single-seed difference, including the
-reference's 119/200 against 189/200, is one draw from a wide distribution.
+sd is three times the baseline's, so any single-seed difference — including the
+reference's own single-seed result — is one draw from a wide distribution.
 
 The full-model pilot attaches the tower to the 25.7M language model and freezes
 everything except the vision tower, the last block, the final norm and the tied
@@ -250,7 +249,8 @@ The same examples, the same budget, only the presentation order changes:
 | Blocked vs interleaved | -8.77 points (95% CI -10.4 to -7.3), p = 0.0020, Holm p = 0.0039 |
 | Interleaved vs curriculum | -0.39 points (95% CI -1.9 to +1.1), Holm p = 0.65 |
 
-The two factors do not interact. Crossing them at 8 and 48 structures, ten seeds:
+The two factors do not interact. Crossing them at 8 and 48 structures, ten seeds per
+cell (192 s in total):
 
 | | 8 structures | 48 structures |
 | --- | ---: | ---: |
@@ -282,8 +282,8 @@ rollouts per checkpoint, all from one seeded run:
 | 130 | 16.8% | 180 | 84.6% |
 | 140 | **33.6%** | 200 | 86.7% |
 
-The band is early and narrow. Step 140 gives 33.6% exact rollouts (pass@16 47%), the
-closest to a balanced reward, and the screen runs there.
+The band is early and narrow. Step 140 gives 33.6% exact rollouts (pass@16 47%) after
+**286,720 tokens**, the closest to a balanced reward, and the screen runs there.
 
 ### Eight arms inside the band
 
@@ -313,7 +313,7 @@ had something to learn from.
 | group-16 | 0 | 2 | -0.062 | 1.000 |
 
 **No arm separates: every comparison is Holm p = 1.00 and the largest difference is two
-tasks out of 32.** This null is not a placement artefact — the policy solves half its
+tasks out of 32.** The screen took 563 s and peaked at 4.8 GiB of GPU memory. This null is not a placement artefact — the policy solves half its
 rollouts from the same prompt and still none of RLOO's design choices move greedy dev
 accuracy. At 25.7M parameters on eight operation families, the design surface of the
 algorithm is flat. With 32 dev tasks, exact McNemar needs six net discordant tasks for
