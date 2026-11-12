@@ -365,6 +365,15 @@ produced a result.
   shapes and the JIT backend recompiles instead of reusing kernels.
 - **The arithmetic corpus and digit renderer use this crate's PRNG.** Same
   distributions, different bytes.
+- **The language model initialises from our own RNG.** Burn's initialisers draw from a
+  process-global RNG, so the same arm and seed started from different weights on every
+  run. Every rank-2 parameter is now drawn at `N(0, 0.02)` — the distribution this
+  model configures — and marked trainable. Vision still initialises through Burn's
+  initialiser under a process lock, which is deterministic for the single-threaded CLI.
+- **The RL checkpoint is chosen by measured signal, not by dev pass@1.** The reference
+  selected step 100 on dev; here the reward-signal rate is measured per checkpoint
+  (sampled pass@16 on the RL split) and step 140 is selected for a ~33% exact-rollout
+  rate. Selecting on dev alone put us either side of the usable band twice.
 
 ## Performance notes
 
