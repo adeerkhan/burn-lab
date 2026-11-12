@@ -6,97 +6,97 @@
     {
       "arm": "8 structures",
       "seeds": 10,
-      "mean_byte_accuracy": 0.5637137989778536,
+      "mean_byte_accuracy": 0.5773424190800682,
       "mean_exact_accuracy": 0.0,
-      "mean_loss": 1.303266331192988,
-      "std_byte_accuracy": 0.048361135442021475
+      "mean_loss": 1.286251197915264,
+      "std_byte_accuracy": 0.023597947945312194
     },
     {
       "arm": "16 structures",
       "seeds": 10,
-      "mean_byte_accuracy": 0.5856899488926747,
+      "mean_byte_accuracy": 0.5846678023850086,
       "mean_exact_accuracy": 0.0,
-      "mean_loss": 1.2591491180749728,
-      "std_byte_accuracy": 0.02861694726758563
+      "mean_loss": 1.2571949960222844,
+      "std_byte_accuracy": 0.02565818738706271
     },
     {
       "arm": "32 structures",
       "seeds": 10,
-      "mean_byte_accuracy": 0.5872231686541738,
+      "mean_byte_accuracy": 0.5908006814310051,
       "mean_exact_accuracy": 0.0,
-      "mean_loss": 1.259962493820938,
-      "std_byte_accuracy": 0.024279549169531574
+      "mean_loss": 1.2410682063492642,
+      "std_byte_accuracy": 0.022310434533273256
     },
     {
       "arm": "48 structures",
       "seeds": 10,
-      "mean_byte_accuracy": 0.5921635434412267,
+      "mean_byte_accuracy": 0.5974446337308349,
       "mean_exact_accuracy": 0.0,
-      "mean_loss": 1.2453101441441847,
-      "std_byte_accuracy": 0.010476963230663324
+      "mean_loss": 1.238784142186329,
+      "std_byte_accuracy": 0.022299591767708776
     },
     {
       "arm": "64 structures",
       "seeds": 10,
-      "mean_byte_accuracy": 0.5802385008517887,
+      "mean_byte_accuracy": 0.60221465076661,
       "mean_exact_accuracy": 0.0,
-      "mean_loss": 1.2650479750088979,
-      "std_byte_accuracy": 0.02562549057075789
+      "mean_loss": 1.2377699111754892,
+      "std_byte_accuracy": 0.01652167691763335
     },
     {
       "arm": "88 structures",
       "seeds": 10,
-      "mean_byte_accuracy": 0.581771720613288,
+      "mean_byte_accuracy": 0.5914821124361158,
       "mean_exact_accuracy": 0.0,
-      "mean_loss": 1.257399032164676,
-      "std_byte_accuracy": 0.02634585056141296
+      "mean_loss": 1.2582514024674383,
+      "std_byte_accuracy": 0.024501001064218708
     }
   ],
   "comparisons": [
     {
       "arm": "16 structures",
       "against": "8 structures",
-      "mean_difference": 0.02197614991482113,
-      "ci_low": 0.0028960817717206154,
-      "ci_high": 0.04497444633730836,
-      "permutation_p": 0.078125,
-      "adjusted_p": 0.3125
+      "mean_difference": 0.007325383304940381,
+      "ci_low": -0.01567291311754686,
+      "ci_high": 0.02759795570698469,
+      "permutation_p": 0.548828125,
+      "adjusted_p": 0.548828125
     },
     {
       "arm": "32 structures",
       "against": "8 structures",
-      "mean_difference": 0.02350936967632028,
-      "ci_low": 0.003236797274275982,
-      "ci_high": 0.048892674616695074,
-      "permutation_p": 0.0625,
-      "adjusted_p": 0.3125
+      "mean_difference": 0.013458262350936978,
+      "ci_low": 0.0003407155025553665,
+      "ci_high": 0.02827938671209542,
+      "permutation_p": 0.123046875,
+      "adjusted_p": 0.484375
     },
     {
       "arm": "48 structures",
       "against": "8 structures",
-      "mean_difference": 0.028449744463373096,
-      "ci_low": 0.00017035775127768326,
-      "ci_high": 0.06405451448040889,
-      "permutation_p": 0.14453125,
-      "adjusted_p": 0.43359375
+      "mean_difference": 0.020102214650766625,
+      "ci_low": -0.001362862010221466,
+      "ci_high": 0.0407155025553663,
+      "permutation_p": 0.12109375,
+      "adjusted_p": 0.484375
     },
     {
       "arm": "64 structures",
       "against": "8 structures",
-      "mean_difference": 0.016524701873935267,
-      "ci_low": -0.009710391822827947,
-      "ci_high": 0.043611584327086894,
-      "permutation_p": 0.294921875,
-      "adjusted_p": 0.58984375
+      "mean_difference": 0.024872231686541756,
+      "ci_low": 0.005621805792163548,
+      "ci_high": 0.04446337308347533,
+      "permutation_p": 0.048828125,
+      "adjusted_p": 0.244140625
     },
     {
       "arm": "88 structures",
       "against": "8 structures",
-      "mean_difference": 0.018057921635434415,
-      "ci_low": -0.010732538330494045,
-      "ci_high": 0.05281090289608179,
-      "permutation_p": 0.38671875,
-      "adjusted_p": 0.58984375
+      "mean_difference": 0.01413969335604771,
+      "ci_low": -0.008006814310051114,
+      "ci_high": 0.03594548551959117,
+      "permutation_p": 0.267578125,
+      "adjusted_p": 0.53515625
     }
   ],
   "reference_arm": "8 structures",

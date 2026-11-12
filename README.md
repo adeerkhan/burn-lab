@@ -93,16 +93,20 @@ model but needs 200 steps, not the reference's 40.
 Two matched studies over an arithmetic corpus, **ten paired seeds** each, with
 initialization seeded per arm. Results after the fix:
 
-- **Diversity: no confirmable effect.** Every arm beats 8 structures by +1.6 to +2.8
-  points, but no comparison survives Holm correction (best is 32 vs 8 at +2.35, Holm
-  p = 0.31). An earlier +3.8 points at Holm p = 0.008 did not reproduce — it came from
+- **Diversity: no confirmable effect.** Every arm beats 8 structures by +0.7 to +2.5
+  points, but no comparison survives Holm correction (best is 64 vs 8 at +2.49, Holm
+  p = 0.24). An earlier +3.8 points at Holm p = 0.008 did not reproduce — it came from
   unseeded initialization, and the init variance was larger than the effect.
 - **Ordering: blocked loses, and that is robust.** Presenting the same examples in
-  blocks costs **-8.77 points** against interleaving (Holm p = 0.0039), stable across
-  every run. Curriculum ordering and interleaving are indistinguishable (Holm p = 0.65).
+  blocks costs **-11.91 points** against interleaving (Holm p = 0.0039), stable across
+  every run. Curriculum ordering and interleaving are indistinguishable (Holm p = 0.74).
 - **The two factors do not interact.** Crossing ordering with 8 versus 48 structures
   gives a difference in differences of +1.8 points (95% CI -0.7 to +4.3, p = 0.23):
   blocking costs 18.2 points at 8 structures and 16.4 at 48.
+- **The studies carry a one-point noise floor.** `wgpu` is not bit-reproducible: the
+  same arm and seed, three times, gave 0.5622, 0.5707 and 0.5826. `flex` is exact but
+  needs hours at this configuration, so it is used for vision and reference checks and
+  the study CIs, not the point estimates, carry the weight.
 
 Exact-expression accuracy was 0% throughout: this measures partial next-byte learning,
 not program generation.

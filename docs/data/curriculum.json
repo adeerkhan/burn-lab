@@ -6,44 +6,44 @@
     {
       "arm": "curriculum-8-to-88",
       "seeds": 10,
-      "mean_byte_accuracy": 0.5892674616695059,
+      "mean_byte_accuracy": 0.5906303236797276,
       "mean_exact_accuracy": 0.0,
-      "mean_loss": 1.235104498810419,
-      "std_byte_accuracy": 0.021480544499159804
+      "mean_loss": 1.246464433519763,
+      "std_byte_accuracy": 0.024934773142664315
     },
     {
       "arm": "diverse-interleaved",
       "seeds": 10,
-      "mean_byte_accuracy": 0.5853492333901192,
+      "mean_byte_accuracy": 0.5940374787052811,
       "mean_exact_accuracy": 0.0,
-      "mean_loss": 1.25737537358851,
-      "std_byte_accuracy": 0.020271856600536327
+      "mean_loss": 1.256033212708046,
+      "std_byte_accuracy": 0.023755932162543406
     },
     {
       "arm": "diverse-blocked",
       "seeds": 10,
-      "mean_byte_accuracy": 0.5015332197614991,
+      "mean_byte_accuracy": 0.47155025553662683,
       "mean_exact_accuracy": 0.0,
-      "mean_loss": 1.6548104433834652,
-      "std_byte_accuracy": 0.02494964085840801
+      "mean_loss": 1.6639268404580458,
+      "std_byte_accuracy": 0.0502085138547496
     }
   ],
   "comparisons": [
     {
       "arm": "diverse-interleaved",
       "against": "curriculum-8-to-88",
-      "mean_difference": -0.003918228279386715,
-      "ci_low": -0.019080068143100527,
-      "ci_high": 0.01141396933560478,
-      "permutation_p": 0.6484375,
-      "adjusted_p": 0.6484375
+      "mean_difference": 0.0034071550255536653,
+      "ci_low": -0.011925042589437829,
+      "ci_high": 0.020442930153321992,
+      "permutation_p": 0.736328125,
+      "adjusted_p": 0.736328125
     },
     {
       "arm": "diverse-blocked",
       "against": "curriculum-8-to-88",
-      "mean_difference": -0.08773424190800685,
-      "ci_low": -0.10408858603066443,
-      "ci_high": -0.07342419080068145,
+      "mean_difference": -0.11908006814310054,
+      "ci_low": -0.1497444633730835,
+      "ci_high": -0.08943781942078369,
       "permutation_p": 0.001953125,
       "adjusted_p": 0.00390625
     }

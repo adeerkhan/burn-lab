@@ -775,7 +775,7 @@ def experiments_chart() -> None:
 
     draw.text(
         (60, height - 84),
-        "No diversity effect survives correction (+2.4 pts at best, Holm p = 0.31); blocked ordering loses 8.8 pts (Holm p = 0.004).",
+        "No diversity effect survives correction (+2.5 pts at best, Holm p = 0.24); blocked ordering loses 11.9 pts (Holm p = 0.004).",
         font=font(19, True),
         fill=INK,
     )

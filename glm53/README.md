@@ -220,21 +220,22 @@ arms start from the same weights for a given seed:
 
 | Study | Result |
 | --- | --- |
-| Data diversity, 16 vs 8 structures | +2.20 points (95% CI +0.3 to +4.5), permutation p = 0.078, Holm p = 0.31 |
-| Data diversity, 32 vs 8 structures | +2.35 points (95% CI +0.3 to +4.9), p = 0.0625, Holm p = 0.31 |
-| Data diversity, 48 vs 8 structures | +2.84 points (95% CI +0.02 to +6.4), p = 0.14, Holm p = 0.43 |
-| Data diversity, 64 vs 8 structures | +1.65 points (95% CI -1.0 to +4.4), Holm p = 0.59 |
-| Data diversity, 88 vs 8 structures | +1.81 points (95% CI -1.1 to +5.3), Holm p = 0.59 |
+| Data diversity, 16 vs 8 structures | +0.73 points (95% CI -1.6 to +2.8), permutation p = 0.55, Holm p = 0.55 |
+| Data diversity, 32 vs 8 structures | +1.35 points (95% CI +0.03 to +2.8), p = 0.123, Holm p = 0.48 |
+| Data diversity, 48 vs 8 structures | +2.01 points (95% CI -0.1 to +4.1), p = 0.121, Holm p = 0.48 |
+| Data diversity, 64 vs 8 structures | +2.49 points (95% CI +0.6 to +4.5), p = 0.049, Holm p = 0.24 |
+| Data diversity, 88 vs 8 structures | +1.41 points (95% CI -0.8 to +3.6), Holm p = 0.54 |
 
 **No diversity effect survives Holm correction.** The point estimates are consistently
-positive (+1.6 to +2.8 points) and peak around 32-48 structures, but ten seeds cannot
-separate any arm from 8. Exact-expression accuracy was 0% in every arm.
+positive (+0.7 to +2.5 points) and peak at 64 structures, but ten seeds cannot separate
+any arm from 8. Exact-expression accuracy was 0% in every arm.
 
 **Correction.** An earlier run reported +3.8 points with Holm p = 0.0078 for 32 vs 8.
 That number was not reproducible: model initialization was never seeded, so each arm
-and seed started from different weights and the pairing was only in the data. With the
-fix, the same comparison is +2.35 points at Holm p = 0.31. The initialization variance
-was larger than the effect being measured.
+and seed started from different weights and the pairing was only in the data. With
+seeded host-side initialization the same comparison is +1.35 points at Holm p = 0.48.
+The initialization variance was larger than the effect being measured, and the `wgpu`
+noise floor below is comparable to the effects themselves.
 
 ### Curriculum and ordering
 
@@ -242,17 +243,17 @@ The same examples, the same budget, only the presentation order changes:
 
 | Arm | Mean byte accuracy | sd |
 | --- | --- | --- |
-| curriculum 8 to 88 | 58.9% | 2.1 |
-| diverse-interleaved | 58.5% | 2.0 |
-| diverse-blocked | 50.2% | 2.5 |
+| curriculum 8 to 88 | 59.1% | 2.5 |
+| diverse-interleaved | 59.4% | 2.4 |
+| diverse-blocked | 47.2% | 5.0 |
 
 | Comparison | Result |
 | --- | --- |
-| Blocked vs interleaved | -8.77 points (95% CI -10.4 to -7.3), p = 0.0020, Holm p = 0.0039 |
-| Interleaved vs curriculum | -0.39 points (95% CI -1.9 to +1.1), Holm p = 0.65 |
+| Blocked vs interleaved | **-11.91 points** (95% CI -15.0 to -8.9), p = 0.0020, Holm p = 0.0039 |
+| Interleaved vs curriculum | +0.34 points (95% CI -1.2 to +2.0), Holm p = 0.74 |
 
 The two factors do not interact. Crossing them at 8 and 48 structures, ten seeds per
-cell (192 s in total):
+cell (192 s in total, on `wgpu` — see the noise note below):
 
 | | 8 structures | 48 structures |
 | --- | ---: | ---: |
@@ -264,8 +265,17 @@ The difference in differences is **+1.8 points (95% CI -0.7 to +4.3, p = 0.23)**
 cost of blocked ordering is the same whether the corpus holds 8 structures or 48, so
 this is one mechanism, not two findings wearing the same name.
 
+**Backend noise.** These studies run on `wgpu` because `flex` needs hours at this
+configuration (248k parameters, autodiff, 200 steps). `wgpu` is not bit-reproducible:
+three runs of the same arm and seed, with identical initial weights (before-loss
+5.432728 each time), produced 0.5622, 0.5707 and 0.5826 — a per-seed sd of about one
+point. That is the noise floor of every table in this section, and it is why the
+paired CIs are worth more than the point estimates. `flex` reproduces bit-identically
+(0.187394 twice on a shorter run) and is used for the vision runs and reference checks,
+where it is affordable.
+
 **Blocked ordering is the one robust result in the study set.** Presenting the same
-examples in blocks costs 8.8 points against interleaving them, and it survives Holm
+examples in blocks costs 11.9 points against interleaving them, and it survives Holm
 correction in every run we have made. Curriculum ordering and interleaving are
 indistinguishable — the earlier -1.6 point gap was initialization noise.
 
@@ -367,6 +377,12 @@ produced a result.
   shapes and the JIT backend recompiles instead of reusing kernels.
 - **The arithmetic corpus and digit renderer use this crate's PRNG.** Same
   distributions, different bytes.
+- **Statistical studies run on `wgpu`, not `flex`.** `flex` is bit-reproducible but needs
+  hours at 248k parameters with autodiff and 200 steps; `wgpu` completes a 40-arm study
+  in about three minutes at a per-seed noise of about one point (measured: the same arm
+  and seed gave 0.5622, 0.5707 and 0.5826). Vision and reference checks use `flex`
+  because they are affordable there. Every study conclusion above is stated with its CI
+  for this reason.
 - **The language model initialises from our own RNG.** Burn's initialisers draw from a
   process-global RNG, so the same arm and seed started from different weights on every
   run. Every rank-2 parameter is now drawn at `N(0, 0.02)` — the distribution this
