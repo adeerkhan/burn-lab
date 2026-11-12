@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "note": "Vision comparison, 120 steps, batch 40, lr 2e-3, 200 held-out examples, seeded initialization. Both implementations use identical tower geometry; parameter counts match exactly (60,924 faithful, 42,500 direct-patch), so any accuracy difference is data or protocol, not architecture.",
+  "note": "Reference comparison at seed 42 plus the earlier three-seed width sweep. The authoritative multi-seed table is vision-multiseed.json (five seeds, widths 24 and 48); width 64 was only ever run at three seeds and is kept here for the capacity trend.",
   "config": {
     "steps": 120,
     "batch_size": 40,
@@ -11,23 +11,77 @@
     "direct_patch_size": 8
   },
   "single_seed_42": {
-    "our_faithful": { "correct": 112, "examples": 200, "accuracy": 0.56, "params": 60924 },
-    "our_direct_patch": { "correct": 175, "examples": 200, "accuracy": 0.875, "params": 42500 },
-    "reference_faithful": { "correct": 112, "examples": 200, "accuracy": 0.56, "params": 60924 },
-    "reference_direct_patch": { "correct": 187, "examples": 200, "accuracy": 0.935, "params": 42500 },
-    "reference_published": { "faithful": "119/200", "direct_patch": "189/200" }
+    "our_faithful": {
+      "correct": 112,
+      "examples": 200,
+      "accuracy": 0.56,
+      "params": 60924
+    },
+    "our_direct_patch": {
+      "correct": 175,
+      "examples": 200,
+      "accuracy": 0.875,
+      "params": 42500
+    },
+    "reference_faithful": {
+      "correct": 112,
+      "examples": 200,
+      "accuracy": 0.56,
+      "params": 60924
+    },
+    "reference_direct_patch": {
+      "correct": 187,
+      "examples": 200,
+      "accuracy": 0.935,
+      "params": 42500
+    },
+    "reference_published": {
+      "faithful": "119/200",
+      "direct_patch": "189/200"
+    }
   },
   "faithful_width_sweep_seeds_42_7_13": {
-    "24": { "scores": [0.56, 0.725, 0.61], "mean": 0.632, "sd": 0.085 },
-    "48": { "scores": [0.765, 0.275, 0.405], "mean": 0.482, "sd": 0.254 },
-    "64": { "scores": [0.21, 0.65, 0.425], "mean": 0.428, "sd": 0.22 }
+    "24": {
+      "scores": [
+        0.56,
+        0.725,
+        0.61
+      ],
+      "mean": 0.632,
+      "sd": 0.085
+    },
+    "48": {
+      "scores": [
+        0.765,
+        0.275,
+        0.405
+      ],
+      "mean": 0.482,
+      "sd": 0.254
+    },
+    "64": {
+      "scores": [
+        0.21,
+        0.65,
+        0.425
+      ],
+      "mean": 0.428,
+      "sd": 0.22
+    }
   },
-  "direct_patch_scores_all_runs": [0.875, 0.875, 0.875, 0.875, 0.865],
+  "direct_patch_scores_all_runs": [
+    0.875,
+    0.875,
+    0.875,
+    0.875,
+    0.865
+  ],
   "findings": [
     "The faithful tower reproduces the reference to the example (112/200 both), which is the strongest single check that the port is faithful.",
     "The direct-patch baseline differs by 6 points (175/200 against 187/200), consistent with a different digit renderer or noise model rather than a different architecture.",
     "Seed-to-seed variance in the faithful tower (sd 8.5 points at width 24, over 20 at wider towers) is larger than the architecture gap at small widths, so one seed cannot rank the two paths.",
     "Widening the faithful tower does not help monotonically: 63.2% at 24, 48.2% at 48, 42.8% at 64 across three seeds.",
     "The baseline is stable at 87.5% in every seeded run, so the direction of the result is not in doubt even though its magnitude is."
-  ]
+  ],
+  "superseded_by": "vision-multiseed.json"
 }
