@@ -116,6 +116,36 @@ impl GLM53Flash {
         (logits, Tensor::stack(usages, 0))
     }
 
+    /// Run one token at position `pos`, using and updating `cache`.
+    ///
+    /// Returns logits `[batch, 1, vocab_size]`. The result must match
+    /// `forward_embeddings` on the full prefix, which is what the equivalence
+    /// test checks.
+    pub fn forward_step(
+        &self,
+        ids: Tensor<2, Int>,
+        pos: usize,
+        cache: &mut crate::kv::Cache,
+    ) -> Tensor<3> {
+        let embedded = self.embed(ids);
+        let [_, time, _] = embedded.dims();
+        assert_eq!(time, 1, "forward_step takes exactly one token");
+        assert!(pos < self.config.max_sequence_length);
+
+        let mut streams = embedded
+            .unsqueeze_dim::<4>(2)
+            .repeat_dim(2, self.config.streams);
+        for (index, layer) in self.layers.iter().enumerate() {
+            let (next, _) = layer.forward_step(streams, pos, &mut cache.layers[index]);
+            streams = next;
+        }
+
+        let hidden = self
+            .final_norm
+            .forward(streams.mean_dim(2).squeeze_dim::<3>(2));
+        self.lm_head(hidden)
+    }
+
     /// The tied language-model head.
     ///
     /// The reference ties the output projection to the embedding matrix, so

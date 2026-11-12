@@ -75,6 +75,28 @@ impl HybridBlock {
         (x.add(ffn), usage)
     }
 
+    /// One token at position `pos`, using and updating the layer cache.
+    pub fn forward_step(
+        &self,
+        x: Tensor<3>,
+        pos: usize,
+        state: &mut crate::kv::LayerState,
+    ) -> (Tensor<3>, Tensor<1>) {
+        let normed = self.attention_norm.forward(x.clone());
+        let attended = match (&self.attention, state) {
+            (Attention::Linear(attention), crate::kv::LayerState::Linear(slot)) => {
+                attention.forward_cached(normed, pos, slot)
+            }
+            (Attention::Sparse(attention), crate::kv::LayerState::Sparse(slot)) => {
+                attention.forward_cached(normed, pos, slot)
+            }
+            _ => panic!("cache kind does not match the layer"),
+        };
+        let x = x.add(attended);
+        let (ffn, usage) = self.moe.forward(self.ffn_norm.forward(x.clone()));
+        (x.add(ffn), usage)
+    }
+
     /// Parameters held by the routed experts, excluding the shared expert.
     pub fn routed_expert_params(&self) -> usize {
         self.moe.routed_expert_params()
@@ -126,6 +148,35 @@ impl HyperConnection {
         let output_weights = output_weights.reshape::<4, _>([1, 1, self.streams, 1]);
         let routed = transformed.unsqueeze_dim::<4>(2).mul(output_weights);
 
+        (streams.add(routed), usage)
+    }
+
+    /// One token at position `pos`, using and updating the layer cache.
+    pub fn forward_step(
+        &self,
+        streams: Tensor<4>,
+        pos: usize,
+        state: &mut crate::kv::LayerState,
+    ) -> (Tensor<4>, Tensor<1>) {
+        let input_weights = activation::softmax(self.input_logits.val(), 0).reshape::<4, _>([
+            1,
+            1,
+            self.streams,
+            1,
+        ]);
+        let mixed = streams
+            .clone()
+            .mul(input_weights)
+            .sum_dim(2)
+            .squeeze_dim::<3>(2);
+        let (transformed, usage) = self.block.forward_step(mixed, pos, state);
+        let output_weights = activation::softmax(self.output_logits.val(), 0).reshape::<4, _>([
+            1,
+            1,
+            self.streams,
+            1,
+        ]);
+        let routed = transformed.unsqueeze_dim::<4>(2).mul(output_weights);
         (streams.add(routed), usage)
     }
 

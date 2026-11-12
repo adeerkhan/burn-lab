@@ -605,3 +605,63 @@ fn host_initialised_parameters_are_trainable() {
         start.len()
     );
 }
+
+/// The cached decode path must agree with recomputing the whole prefix.
+///
+/// This is the acceptance test for the KV cache: at every prefix length, the
+/// last-position logits from `forward_step` are within 1e-5 of the full forward.
+#[test]
+fn the_kv_cache_matches_the_full_prefix() {
+    let device = Device::flex();
+    let config = ModelConfig::new()
+        .with_dim(32)
+        .with_heads(2)
+        .with_layers(2)
+        .with_experts(2)
+        .with_expert_hidden(16)
+        .with_streams(2)
+        .with_max_sequence_length(64);
+    let model = glm53::seeding::seeded_model(&config, 5, &device).valid();
+
+    let prompt: Vec<i64> = (0..12).map(|index| 10 + (index * 7 % 50) as i64).collect();
+    let mut cache = glm53::kv::Cache::new(model.config());
+    let mut worst = 0.0f32;
+
+    for length in 1..=prompt.len() {
+        let input = Tensor::<2, Int>::from_data(
+            TensorData::new(prompt[..length].to_vec(), [1, length]),
+            &device,
+        );
+        let (logits, _) = model.clone().forward(input);
+        let [_, time, vocab] = logits.dims();
+        let full = logits
+            .slice([0..1, time - 1..time, 0..vocab])
+            .reshape([vocab])
+            .to_data()
+            .convert::<f32>()
+            .try_to_vec::<f32>()
+            .unwrap();
+
+        let token = prompt[length - 1];
+        let step = model
+            .forward_step(
+                Tensor::<2, Int>::from_data(TensorData::new(vec![token], [1, 1]), &device),
+                length - 1,
+                &mut cache,
+            )
+            .reshape([vocab])
+            .to_data()
+            .convert::<f32>()
+            .try_to_vec::<f32>()
+            .unwrap();
+
+        for (a, b) in full.iter().zip(&step) {
+            worst = worst.max((a - b).abs());
+        }
+    }
+
+    assert!(
+        worst < 1e-5,
+        "max |delta| between cached and full prefix: {worst:e}"
+    );
+}

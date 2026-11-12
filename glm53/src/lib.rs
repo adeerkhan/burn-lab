@@ -17,6 +17,7 @@ pub mod evaluation;
 pub mod evaluator;
 pub mod experiments;
 pub mod generate;
+pub mod kv;
 pub mod metrics;
 pub mod model;
 pub mod moe;

@@ -95,6 +95,17 @@ cheaper one.
 
 Dev saturates, exactly as the reference reports for its own benchmark.
 
+### Statistical power
+
+The confirm split can be read at 64 tasks (8 per family), and the 32-task version is its
+deterministic prefix — a test pins that. At step 400 the model scores **64/64**, so the
+split is saturated and any further RL claim would need a weaker checkpoint, not a bigger
+split.
+
+Six net discordant tasks are enough for exact McNemar p < 0.05. At 64 tasks that is
+**9.4%** of the split, against 18.8% at 32 — so the smallest effect this design can
+confirm halved, to roughly nine points.
+
 ### RL (RLOO, `last-block-head`, 32 groups x 8 rollouts, T=0.4, lr 5e-5)
 
 RL starts from **checkpoint 200**, not 400. Two reasons, both measured:
@@ -237,6 +248,24 @@ seeded host-side initialization the same comparison is +1.35 points at Holm p = 
 The initialization variance was larger than the effect being measured, and the `wgpu`
 noise floor below is comparable to the effects themselves.
 
+### The reference's own studies, at matched settings
+
+Running the reference implementation (PyTorch, CPU) with `--steps 200` and seeds
+`11,22,33` — the same settings as ours — gives:
+
+| Arm | Reference | Ours (same 3 seeds) |
+| --- | ---: | ---: |
+| Diversity 8 | 56.35% | 56.50% |
+| Diversity 32 | 59.49% | 60.65% |
+| Diversity 88 | 59.60% | 60.08% |
+| Curriculum 8 to 88 | 60.91% | 58.66% |
+| Interleaved | 59.60% | 60.25% |
+| Blocked | 49.40% | **48.15%** |
+
+The two implementations land within about a point on five of six arms, and within 1.3
+points on the blocked arm that carries the result. That is a cross-implementation
+replication of the ordering effect, not just of the model.
+
 ### Curriculum and ordering
 
 The same examples, the same budget, only the presentation order changes:
@@ -274,6 +303,24 @@ paired CIs are worth more than the point estimates. `flex` reproduces bit-identi
 (0.187394 twice on a shorter run) and is used for the vision runs and reference checks,
 where it is affordable.
 
+### Why does blocking hurt?
+
+Three cells with the same examples, ten seeds, 200 steps, batch 24:
+
+| Arm | Mean | sd |
+| --- | ---: | ---: |
+| blocked | 47.2% | 5.0 |
+| blocked-shuffled | 48.4% | 3.5 |
+| interleaved | 59.4% | 1.8 |
+
+Shuffling the examples *inside* each block recovers almost nothing: **+1.2 points**
+(95% CI -0.4 to +3.0, p = 0.23). Interleaving is **+12.3** over blocked and **+11.0**
+over shuffled (both Holm p = 0.0039).
+
+So the cost is not the order of examples within a block — every example is already
+distinct. It is the long run of a single *structure* that hurts. That points at
+interference or forgetting across structures, not at repetition.
+
 **Blocked ordering is the one robust result in the study set.** Presenting the same
 examples in blocks costs 11.9 points against interleaving them, and it survives Holm
 correction in every run we have made. Curriculum ordering and interleaving are
@@ -296,6 +343,16 @@ rollouts per checkpoint, all from one seeded run:
 
 The band is early and narrow. Step 140 gives 33.6% exact rollouts (pass@16 47%) after
 **286,720 tokens**, the closest to a balanced reward, and the screen runs there.
+
+Measured again at 5-step resolution around the transition: 33.6% at 140, 38.9% at 150,
+54.9% at 155 and 67.6% at 160. The 20-60% window is about **15-20 steps wide**, so the
+transition is sharp at every resolution measured.
+
+Widening the band was the remaining hope, and it is not there. Two harder families were
+the planned intervention, but they change the corpus and every split size (8 -> 10
+families turns the 64-task confirm split into 80), which would have invalidated the
+other results in the same run. The band was characterised at finer resolution instead,
+and it did not widen.
 
 ### Eight arms inside the band
 
@@ -325,11 +382,41 @@ had something to learn from.
 | group-16 | 0 | 2 | -0.062 | 1.000 |
 
 **No arm separates: every comparison is Holm p = 1.00 and the largest difference is two
-tasks out of 32.** The screen took 563 s and peaked at 4.8 GiB of GPU memory. This null is not a placement artefact — the policy solves half its
+tasks out of 32.** The screen took 563 s and peaked at 4.8 GiB of GPU memory.
+
+**What this rules out, and what it does not.** It rules out a design-choice effect large
+enough to matter at this scale — six net tasks — *with a real reward signal present*
+(33.6% of rollouts exactly correct, 64/128 in the baseline arm). It does not rule out
+that RLOO helps from a much weaker policy: the reference's 0/24 → 16/24 came from a
+checkpoint that solved about a quarter of dev greedily, and no point in our band has
+that shape. It also does not rule out effects that need more groups or longer training;
+the screen changes one axis at a time with 16 groups and 8 rollouts. The screen took 563 s and peaked at 4.8 GiB of GPU memory. This null is not a placement artefact — the policy solves half its
 rollouts from the same prompt and still none of RLOO's design choices move greedy dev
 accuracy. At 25.7M parameters on eight operation families, the design surface of the
 algorithm is flat. With 32 dev tasks, exact McNemar needs six net discordant tasks for
 p < 0.05; two is noise by construction.
+
+## Decoding speed
+
+`generate_group` and `generate_raw` now keep a per-layer cache: the running
+`sum k v^T` and `sum k` for linear attention, and the keys and values for sparse
+attention. The reference recomputes the whole prefix at every token; that is the
+deviation.
+
+`cargo run -p glm53 --release --example cache_bench -- <backend>` times both paths on
+the same model, a 48-token prompt, 16 rows and 24 new tokens, after a warm-up:
+
+| Backend | Cached | Uncached | Speedup |
+| --- | ---: | ---: | ---: |
+| `flex` | 0.41 s (934 tok/s) | 2.69 s (143 tok/s) | **6.5x** |
+| `wgpu` | 1.08 s (356 tok/s) | 16.55 s (23 tok/s) | **15.4x** |
+
+The cold run is misleading: the first wgpu measurement was *slower* with the cache
+because the single-token shapes had to compile. Warm, the cache wins on both backends,
+and it wins more on the GPU, where recomputing the prefix dominates.
+
+Equivalence is tested: at every prefix length, the last-position logits from
+`forward_step` are within 1e-5 of the full forward.
 
 ## Receipts
 

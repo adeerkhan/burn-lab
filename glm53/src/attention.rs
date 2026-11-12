@@ -61,6 +61,11 @@ impl AttentionBase {
     ///
     /// Returns three tensors shaped `[batch, heads, time, head_dim]`.
     fn qkv_heads(&self, x: Tensor<3>) -> (Tensor<4>, Tensor<4>, Tensor<4>) {
+        self.qkv_heads_at(x, 0)
+    }
+
+    /// As [`Self::qkv_heads`], with rotary positions starting at `start`.
+    fn qkv_heads_at(&self, x: Tensor<3>, start: usize) -> (Tensor<4>, Tensor<4>, Tensor<4>) {
         let [batch, time, dim] = x.dims();
         let qkv = self.qkv.forward(x);
 
@@ -74,7 +79,7 @@ impl AttentionBase {
         let k = k.reshape::<4, _>(shape).swap_dims(1, 2);
         let v = v.reshape::<4, _>(shape).swap_dims(1, 2);
 
-        (self.rope.forward(q), self.rope.forward(k), v)
+        (self.rope.apply(q, start), self.rope.apply(k, start), v)
     }
 
     /// Apply the output projection to `[batch, heads, time, head_dim]`.
@@ -137,6 +142,39 @@ impl LinearAttention {
     }
 }
 
+impl LinearAttention {
+    /// One token at position `pos`, updating the running state.
+    ///
+    /// `out_t = (q_t . sum_{s<=t} k_s v_s^T) / (q_t . sum_{s<=t} k_s)`, which is
+    /// the same quantity the full path computes with a causal mask.
+    pub fn forward_cached(
+        &self,
+        x: Tensor<3>,
+        pos: usize,
+        state: &mut Option<(Tensor<4>, Tensor<4>)>,
+    ) -> Tensor<3> {
+        let (q, k, v) = self.base.qkv_heads_at(x, pos);
+        let q = activation::elu(q, 1.0).add_scalar(1.0);
+        let k = activation::elu(k, 1.0).add_scalar(1.0);
+
+        let outer = k.clone().transpose().matmul(v);
+        let sum_k = k.sum_dim(2);
+
+        let (mut total, mut normaliser) = match state.take() {
+            Some((total, normaliser)) => (total, normaliser),
+            None => (outer.zeros_like(), sum_k.zeros_like()),
+        };
+        total = total.add(outer);
+        normaliser = normaliser.add(sum_k);
+        *state = Some((total.clone(), normaliser.clone()));
+
+        let numerator = q.clone().matmul(total);
+        let denominator = q.mul(normaliser).sum_dim(3);
+        let output = numerator.div(denominator.clamp_min(1e-6));
+        self.base.project_out(output)
+    }
+}
+
 /// Gathered causal attention over a local window plus strided anchors.
 ///
 /// The reference gathers, for every query position, the keys at multiples of
@@ -181,6 +219,49 @@ impl SparseAttention {
         let weights = activation::softmax(scores.cast(FloatDType::F32), 3).cast(dtype);
         let output = weights.matmul(v);
 
+        self.base.project_out(output)
+    }
+}
+
+impl SparseAttention {
+    /// One token at position `pos`, appending to the cached keys and values.
+    pub fn forward_cached(
+        &self,
+        x: Tensor<3>,
+        pos: usize,
+        state: &mut Option<(Tensor<4>, Tensor<4>)>,
+    ) -> Tensor<3> {
+        let (q, k, v) = self.base.qkv_heads_at(x, pos);
+        let [batch, heads, _, head_dim] = k.dims();
+
+        let (keys, values) = match state.take() {
+            Some((keys, values)) => (keys, values),
+            None => (
+                Tensor::zeros([batch, heads, 0, head_dim], &k.device()),
+                Tensor::zeros([batch, heads, 0, head_dim], &v.device()),
+            ),
+        };
+        let keys = Tensor::cat(vec![keys, k], 2);
+        let values = Tensor::cat(vec![values, v], 2);
+        *state = Some((keys.clone(), values.clone()));
+
+        let time = keys.dims()[2];
+        let scores = q
+            .matmul(keys.transpose())
+            .mul_scalar((head_dim as f32).powf(-0.5));
+
+        // The same rule as `sparse_mask`, for the single query at `pos`.
+        let mut row = Vec::with_capacity(time);
+        for key in 0..time {
+            let visible = key % self.stride == 0 || key + self.window > pos;
+            row.push(if visible { 0.0f32 } else { MASK_VALUE });
+        }
+        let mask = Tensor::<4>::from_data(TensorData::new(row, [1, 1, 1, time]), &scores.device());
+        let scores = scores.add(mask);
+
+        let dtype = scores.dtype();
+        let weights = activation::softmax(scores.cast(FloatDType::F32), 3).cast(dtype);
+        let output = weights.matmul(values);
         self.base.project_out(output)
     }
 }
