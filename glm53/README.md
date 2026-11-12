@@ -203,7 +203,9 @@ reference's own single-seed result — is one draw from a wide distribution.
 The full-model pilot attaches the tower to the 25.7M language model and freezes
 everything except the vision tower, the last block, the final norm and the tied
 embedding — 2.3M of 25.7M parameters. It learns the digit task through a saturated
-coding model, but 40 steps plateaued at chance (10%) and 200 steps reached 32%.
+coding model, but 40 steps plateaued at chance (10%) and 200 steps reached 32%. That
+is the reference's pilot design: one run, so the number is descriptive, not an estimate
+with a spread.
 
 ## The miniature studies
 
