@@ -207,9 +207,26 @@ pub fn train_vision(
     device: &Device,
     on_step: &mut dyn FnMut(&str, usize, f64),
 ) -> VisionReport {
+    train_vision_with(architectures, config, &vision_config(), device, on_step)
+}
+
+/// As [`train_vision`], with the faithful tower's geometry supplied by the caller.
+///
+/// The direct-patch baseline keeps its own fixed shape, so a width sweep measures
+/// whether added capacity closes the gap rather than changing both arms at once.
+pub fn train_vision_with(
+    architectures: &[Architecture],
+    config: &VisionTrainConfig,
+    vision: &VisionConfig,
+    device: &Device,
+    on_step: &mut dyn FnMut(&str, usize, f64),
+) -> VisionReport {
     let started = Instant::now();
     let language = vision_language_config();
-    let vision = vision_config();
+    let vision = vision.clone();
+    // Both architectures must start from the same language model, or the
+    // faithful-versus-direct comparison carries initialisation noise.
+    device.seed(config.seed);
 
     let mut results = Vec::new();
     for architecture in architectures {

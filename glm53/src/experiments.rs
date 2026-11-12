@@ -202,6 +202,10 @@ fn train_arm(
 ) -> ArmResult {
     let started = Instant::now();
     let model_config = arithmetic::miniature_config(config.sequence_length);
+    // Seed before construction: without this the initial weights depend on how
+    // many draws the device made earlier in the process, so the same (arm, seed)
+    // starts from a different point on every run and across arms.
+    device.seed(seed);
     let mut model = GLM53Flash::new(&model_config, device);
 
     let mut optimizer = AdamWConfig::new()
@@ -402,6 +406,34 @@ mod tests {
         assert_eq!(report.runs[0].arm, "8 structures");
         assert_eq!(report.runs[0].steps, 2);
         assert!(report.runs[0].after.target_byte_accuracy <= 1.0);
+    }
+
+    /// The same arm and seed must start from the same weights. Before the device
+    /// was seeded at construction the initial loss depended on how many draws the
+    /// process had already made, so results differed between runs and between arms.
+    #[test]
+    #[ignore = "`Device::seed` is process-global and the test harness runs in parallel, so \
+                another test can draw from the same device between the seed and the \
+                construction; run `cargo test -- --ignored --test-threads=1` to exercise it"]
+    fn the_same_arm_and_seed_reproduce_exactly() {
+        let device = Device::flex().autodiff();
+        let config = StudyConfig {
+            steps: 3,
+            batch_size: 2,
+            ..tiny()
+        };
+        let first = data_diversity(&[8], &config, &device);
+        let second = data_diversity(&[8], &config, &device);
+
+        assert_eq!(first.runs.len(), 1);
+        assert_eq!(
+            first.runs[0].before.target_loss, second.runs[0].before.target_loss,
+            "the initial model must not depend on process history"
+        );
+        assert_eq!(
+            first.runs[0].after.target_byte_accuracy,
+            second.runs[0].after.target_byte_accuracy
+        );
     }
 
     #[test]

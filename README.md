@@ -80,19 +80,30 @@ directions.
 ![Both image paths and the 25M pilot](docs/vision.webp)
 
 The vision path is ported module for module. At this scale the **direct-patch
-baseline beats the faithful encoder**, 86.5% against 73.5% — the same outcome the
-reference reports (189/200 against 119/200). At the smoke-test size the ordering
-flips (faithful 47.0% against 40.0%), so the faithful tower is the slower learner,
-not the weaker one. The 25.7M pilot learns the digit task through a saturated coding
+baseline beats the faithful encoder** in every seed: 87.5% against 56-76.5% over
+seeds 42, 7 and 13. Running the reference implementation itself reproduces us closely
+— faithful 112/200 (56.0%) against 187/200 (93.5%) — and our faithful tower also
+scores 112/200, so the two agree to the example. The magnitude is unstable though:
+the faithful tower's seed-to-seed sd is 8.5 points at width 24 and over 20 at larger
+widths, so a single seed cannot rank the architectures and the reference's one-seed
+comparison is one draw. The 25.7M pilot learns the digit task through a saturated coding
 model but needs 200 steps, not the reference's 40.
 
 ![Data diversity and curriculum ordering](docs/experiments.webp)
 
-Two matched studies over an arithmetic corpus, **ten paired seeds** each. 32
-structures beat 8 by +3.8 points (Holm p = 0.008) and blocked ordering loses 9.3
-points (Holm p = 0.004) — both survive correction. 88 structures is not separable
-from 8, so the gain is not monotonic in diversity. Exact-expression accuracy was 0%
-throughout.
+Two matched studies over an arithmetic corpus, **ten paired seeds** each, with
+initialization seeded per arm. Results after the fix:
+
+- **Diversity: no confirmable effect.** Every arm beats 8 structures by +1.6 to +2.8
+  points, but no comparison survives Holm correction (best is 32 vs 8 at +2.35, Holm
+  p = 0.31). An earlier +3.8 points at Holm p = 0.008 did not reproduce — it came from
+  unseeded initialization, and the init variance was larger than the effect.
+- **Ordering: blocked loses, and that is robust.** Presenting the same examples in
+  blocks costs **-8.77 points** against interleaving (Holm p = 0.0039), stable across
+  every run. Curriculum ordering and interleaving are indistinguishable (Holm p = 0.65).
+
+Exact-expression accuracy was 0% throughout: this measures partial next-byte learning,
+not program generation.
 
 ## RL variant screen and group-size confirmation
 
@@ -198,7 +209,7 @@ are both right.
 ```sh
 git clone https://github.com/adeerkhan/burn-lab
 cd burn-lab
-cargo test --workspace --release          # 82 tests
+cargo test --workspace --release          # 97 tests
 cargo run -p glm53 --release -- params    # parameter counts
 ```
 
@@ -382,7 +393,7 @@ RTX 5060 Laptop (Vulkan through wgpu versus CUDA), 28-core CPU, PyTorch
   where a `Tensor<3>` belongs fails the build. Device mismatches are a clear
   runtime panic rather than a silent cross-device copy — which is how one bug in
   this very port was caught.
-- **`cargo test` runs 82 tests in about a second** once built, including a
+- **`cargo test` runs 97 tests in about a second** once built, including a
   numerical gradient check.
 
 ## What we learned about Burn
@@ -434,7 +445,7 @@ discipline that preserves every rollout and checkpoint hash.
 ## Tests
 
 ```sh
-cargo test -p glm53 --release                                                  # 82 tests
+cargo test -p glm53 --release                                                  # 97 tests
 GLM53_WGPU_TEST=1 cargo test -p glm53 --release --test model_checks backends_agree
 ```
 

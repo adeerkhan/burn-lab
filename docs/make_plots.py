@@ -775,13 +775,13 @@ def experiments_chart() -> None:
 
     draw.text(
         (60, height - 84),
-        "32 structures beat 8 by +3.8 pts (Holm p = 0.008); blocked ordering loses 9.3 pts (Holm p = 0.004).",
+        "No diversity effect survives correction (+2.4 pts at best, Holm p = 0.31); blocked ordering loses 8.8 pts (Holm p = 0.004).",
         font=font(19, True),
         fill=INK,
     )
     draw.text(
         (60, height - 54),
-        "88 structures is not separable from 8 at ten seeds, so the gain is not monotonic in diversity.",
+        "Ten seeds, seeded initialization: the earlier +3.8 pt / p = 0.008 result was an initialization artefact.",
         font=font(19),
         fill=INK,
     )

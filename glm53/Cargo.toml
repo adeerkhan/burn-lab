@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-# Burn, pinned to the release this port was written against.
+# Path dependency on the vendored Burn checkout.
 burn = { version = "=0.23.0-pre.2", features = [
     "flex",
     "train",

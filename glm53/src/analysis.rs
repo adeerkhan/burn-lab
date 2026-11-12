@@ -823,3 +823,99 @@ mod results_tests {
         assert_eq!(summary["summary"]["study"]["kind"], "study");
     }
 }
+
+/// Golden values computed by hand, so a silent change in any statistic fails here
+/// rather than in a published table.
+#[cfg(test)]
+mod golden_tests {
+    use super::*;
+
+    fn close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-12,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn mcnemar_matches_the_exact_binomial_tail() {
+        // No discordant pairs cannot distinguish the arms.
+        close(mcnemar_exact(0, 0), 1.0);
+        // One discordant pair: p = 2 * C(1,0)/2 = 1.0.
+        close(mcnemar_exact(1, 0), 1.0);
+        // Six wins, no losses: p = 2 / 2^6 = 0.03125.
+        close(mcnemar_exact(6, 0), 2.0_f64.powi(-5));
+        // Exactly balanced: 2 * P(X <= 3) = 1.3125, clipped to 1.
+        close(mcnemar_exact(3, 3), 1.0);
+        // Ten against two: 2 * (C(12,0)+C(12,1)+C(12,2)) / 2^12 = 158/4096.
+        close(mcnemar_exact(10, 2), 158.0 / 4096.0);
+        // Symmetry in the argument order.
+        close(mcnemar_exact(10, 2), mcnemar_exact(2, 10));
+    }
+
+    #[test]
+    fn the_permutation_test_is_exhaustive_below_thirteen_pairs() {
+        // A single pair: both signs are equally extreme, p = 2/2 = 1.
+        close(paired_permutation_p(&[1.0]), 1.0);
+        // Three identical positive differences: only +,+,+ and -,-,- reach the
+        // observed magnitude, so p = 2/8.
+        close(paired_permutation_p(&[1.0, 1.0, 1.0]), 0.25);
+        // Four identical differences: p = 2/16.
+        close(paired_permutation_p(&[2.0; 4]), 0.125);
+        // No difference at all is not evidence.
+        close(paired_permutation_p(&[0.0, 0.0, 0.0]), 1.0);
+        // Sign symmetry: flipping every sign must not change the p-value.
+        let differences = [1.0, -2.0, 3.0, 0.5, -1.0];
+        let flipped: Vec<f64> = differences.iter().map(|value| -value).collect();
+        close(
+            paired_permutation_p(&differences),
+            paired_permutation_p(&flipped),
+        );
+    }
+
+    #[test]
+    fn holm_is_step_down_and_order_preserving() {
+        // Sorted: 0.01, 0.03, 0.04 -> 0.03, 0.06, 0.04, then enforce monotonicity
+        // so the third becomes 0.06.
+        let adjusted = holm(&[0.01, 0.04, 0.03]);
+        assert!((adjusted[0] - 0.03).abs() < 1e-12, "{adjusted:?}");
+        assert!((adjusted[1] - 0.06).abs() < 1e-12, "{adjusted:?}");
+        assert!((adjusted[2] - 0.06).abs() < 1e-12, "{adjusted:?}");
+
+        // Never below the raw value, never above one, and monotone in rank.
+        let raw = [0.001, 0.02, 0.2, 0.5];
+        let corrected = holm(&raw);
+        for (raw, corrected) in raw.iter().zip(&corrected) {
+            assert!(*corrected >= *raw - 1e-12);
+            assert!(*corrected <= 1.0);
+        }
+    }
+
+    #[test]
+    fn the_bootstrap_is_seeded_and_contains_a_constant() {
+        let values = [2.0; 8];
+        let (low, high) = bootstrap_ci(&values, 2_000, 7);
+        close(low, 2.0);
+        close(high, 2.0);
+
+        // Same seed, same interval.
+        let a = bootstrap_ci(&[1.0, 2.0, 3.0, 4.0], 2_000, 11);
+        let b = bootstrap_ci(&[1.0, 2.0, 3.0, 4.0], 2_000, 11);
+        assert_eq!(a, b);
+
+        // The interval is ordered and brackets the sample mean.
+        let sample = [1.0, 2.0, 3.0, 4.0, 10.0];
+        let (low, high) = bootstrap_ci(&sample, 4_000, 3);
+        let mean = sample.iter().sum::<f64>() / sample.len() as f64;
+        assert!(low <= mean && mean <= high, "{low}..{high} vs {mean}");
+    }
+
+    #[test]
+    fn task_bootstrap_resamples_tasks_not_seeds() {
+        // One value per task: the interval must cover the zero-mean case.
+        let differences = [0.0; 32];
+        let (low, high) = task_bootstrap(&differences, 1_000, 5);
+        close(low, 0.0);
+        close(high, 0.0);
+    }
+}

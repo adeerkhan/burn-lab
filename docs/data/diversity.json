@@ -6,46 +6,97 @@
     {
       "arm": "8 structures",
       "seeds": 10,
-      "mean_byte_accuracy": 0.5635434412265758,
+      "mean_byte_accuracy": 0.5637137989778536,
       "mean_exact_accuracy": 0.0,
-      "mean_loss": 1.3287748126500307,
-      "std_byte_accuracy": 0.036002450571623205
+      "mean_loss": 1.303266331192988,
+      "std_byte_accuracy": 0.048361135442021475
+    },
+    {
+      "arm": "16 structures",
+      "seeds": 10,
+      "mean_byte_accuracy": 0.5856899488926747,
+      "mean_exact_accuracy": 0.0,
+      "mean_loss": 1.2591491180749728,
+      "std_byte_accuracy": 0.02861694726758563
     },
     {
       "arm": "32 structures",
       "seeds": 10,
-      "mean_byte_accuracy": 0.6017035775127768,
+      "mean_byte_accuracy": 0.5872231686541738,
       "mean_exact_accuracy": 0.0,
-      "mean_loss": 1.2432615546189134,
-      "std_byte_accuracy": 0.01451766149349216
+      "mean_loss": 1.259962493820938,
+      "std_byte_accuracy": 0.024279549169531574
+    },
+    {
+      "arm": "48 structures",
+      "seeds": 10,
+      "mean_byte_accuracy": 0.5921635434412267,
+      "mean_exact_accuracy": 0.0,
+      "mean_loss": 1.2453101441441847,
+      "std_byte_accuracy": 0.010476963230663324
+    },
+    {
+      "arm": "64 structures",
+      "seeds": 10,
+      "mean_byte_accuracy": 0.5802385008517887,
+      "mean_exact_accuracy": 0.0,
+      "mean_loss": 1.2650479750088979,
+      "std_byte_accuracy": 0.02562549057075789
     },
     {
       "arm": "88 structures",
       "seeds": 10,
-      "mean_byte_accuracy": 0.5804088586030666,
+      "mean_byte_accuracy": 0.581771720613288,
       "mean_exact_accuracy": 0.0,
-      "mean_loss": 1.2800676651667087,
-      "std_byte_accuracy": 0.032472906409465936
+      "mean_loss": 1.257399032164676,
+      "std_byte_accuracy": 0.02634585056141296
     }
   ],
   "comparisons": [
     {
+      "arm": "16 structures",
+      "against": "8 structures",
+      "mean_difference": 0.02197614991482113,
+      "ci_low": 0.0028960817717206154,
+      "ci_high": 0.04497444633730836,
+      "permutation_p": 0.078125,
+      "adjusted_p": 0.3125
+    },
+    {
       "arm": "32 structures",
       "against": "8 structures",
-      "mean_difference": 0.038160136286201046,
-      "ci_low": 0.01925042589437821,
-      "ci_high": 0.06269165247018742,
-      "permutation_p": 0.00390625,
-      "adjusted_p": 0.0078125
+      "mean_difference": 0.02350936967632028,
+      "ci_low": 0.003236797274275982,
+      "ci_high": 0.048892674616695074,
+      "permutation_p": 0.0625,
+      "adjusted_p": 0.3125
+    },
+    {
+      "arm": "48 structures",
+      "against": "8 structures",
+      "mean_difference": 0.028449744463373096,
+      "ci_low": 0.00017035775127768326,
+      "ci_high": 0.06405451448040889,
+      "permutation_p": 0.14453125,
+      "adjusted_p": 0.43359375
+    },
+    {
+      "arm": "64 structures",
+      "against": "8 structures",
+      "mean_difference": 0.016524701873935267,
+      "ci_low": -0.009710391822827947,
+      "ci_high": 0.043611584327086894,
+      "permutation_p": 0.294921875,
+      "adjusted_p": 0.58984375
     },
     {
       "arm": "88 structures",
       "against": "8 structures",
-      "mean_difference": 0.016865417376490638,
-      "ci_low": -0.010051107325383312,
-      "ci_high": 0.044293015332197636,
-      "permutation_p": 0.30078125,
-      "adjusted_p": 0.30078125
+      "mean_difference": 0.018057921635434415,
+      "ci_low": -0.010732538330494045,
+      "ci_high": 0.05281090289608179,
+      "permutation_p": 0.38671875,
+      "adjusted_p": 0.58984375
     }
   ],
   "reference_arm": "8 structures",

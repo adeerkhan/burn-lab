@@ -14,7 +14,9 @@ use glm53::{
     tasks,
     training::{TrainConfig, list_checkpoints, train},
     vision_pilot::{PilotConfig, run_pilot, write_report as write_pilot_report},
-    vision_train::{Architecture, VisionTrainConfig, train_vision, write_report},
+    vision_train::{
+        Architecture, VisionTrainConfig, train_vision_with, vision_config, write_report,
+    },
 };
 
 const USAGE: &str = "\
@@ -109,6 +111,9 @@ struct Options {
     groups: usize,
     group_size: usize,
     tasks_per_family: usize,
+    vision_width: usize,
+    vision_depth: usize,
+    seed: u64,
     train_scope: String,
     reward_mode: String,
     invalid_penalty: f64,
@@ -149,6 +154,9 @@ impl Default for Options {
             groups: rl.groups,
             group_size: rl.group_size,
             tasks_per_family: rl.tasks_per_family,
+            vision_width: 24,
+            vision_depth: 2,
+            seed: 42,
             train_scope: rl.train_scope.label().to_string(),
             reward_mode: rl.reward_mode.label().to_string(),
             invalid_penalty: rl.invalid_penalty,
@@ -174,6 +182,15 @@ impl Options {
             match key {
                 "--backend" => options.backend = value(&mut index),
                 "--steps" => options.steps = value(&mut index).parse().expect("invalid --steps"),
+                "--vision-width" => {
+                    options.vision_width =
+                        value(&mut index).parse().expect("invalid --vision-width")
+                }
+                "--vision-depth" => {
+                    options.vision_depth =
+                        value(&mut index).parse().expect("invalid --vision-depth")
+                }
+                "--seed" => options.seed = value(&mut index).parse().expect("invalid --seed"),
                 "--batch-size" => {
                     options.batch_size = value(&mut index).parse().expect("invalid --batch-size")
                 }
@@ -311,10 +328,14 @@ fn main() {
             let memory = PeakMemory::start();
             let device = options.device().autodiff();
             println!("Backend: {}  Device: {device:?}", options.backend);
+            // Seed before construction so a run with the same configuration and
+            // seed starts from the same weights.
+            device.seed(options.seed);
             let model = GLM53Flash::new(&config, &device);
             print_model(&model);
 
             let train_config = TrainConfig {
+                seed: options.seed,
                 steps: options.steps,
                 batch_size: options.batch_size,
                 sequence_length: options.seq_len,
@@ -593,7 +614,7 @@ fn main() {
                 batch_size: options.batch_size,
                 learning_rate: options.learning_rate.unwrap_or(2e-3),
                 eval_examples: options.per_family * 50,
-                seed: 42,
+                seed: options.seed,
                 noise: 0.06,
             };
             if options.smoke {
@@ -619,9 +640,20 @@ fn main() {
                 config.eval_examples
             );
 
-            let report = train_vision(&architectures, &config, &device, &mut |name, step, loss| {
-                println!("  {name:<22} step {step:>3}  loss {loss:.4}");
-            });
+            let vision = vision_config()
+                .with_hidden_size(options.vision_width)
+                .with_intermediate_size(options.vision_width * 2)
+                .with_depth(options.vision_depth)
+                .with_heads(4);
+            let report = train_vision_with(
+                &architectures,
+                &config,
+                &vision,
+                &device,
+                &mut |name, step, loss| {
+                    println!("  {name:<22} step {step:>3}  loss {loss:.4}");
+                },
+            );
 
             println!(
                 "\n{:<24} {:>8} {:>9} {:>9} {:>7}",

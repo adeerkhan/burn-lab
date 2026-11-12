@@ -71,13 +71,26 @@ impl Evaluation {
     }
 }
 
-/// Where the harness is written before each batch.
+/// Where the harness is written, once per process.
+///
+/// A fixed, shared path is not safe: every call used to truncate and rewrite
+/// `harness.py`, so a second thread (the test suite runs in parallel) could hand
+/// `python3` a half-written file and fail with a syntax error. The path is now
+/// per-process and written once through `OnceLock`, and it is published with a
+/// rename so a reader never observes a partial file.
 fn harness_path() -> PathBuf {
-    let directory = std::env::temp_dir().join("glm53-evaluator");
-    fs::create_dir_all(&directory).expect("create the evaluator scratch directory");
-    let path = directory.join("harness.py");
-    fs::write(&path, HARNESS).expect("write the evaluator harness");
-    path
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let directory =
+            std::env::temp_dir().join(format!("glm53-evaluator-{}", std::process::id()));
+        fs::create_dir_all(&directory).expect("create the evaluator scratch directory");
+        let path = directory.join("harness.py");
+        let staged = directory.join("harness.py.staged");
+        fs::write(&staged, HARNESS).expect("write the evaluator harness");
+        fs::rename(&staged, &path).expect("publish the evaluator harness");
+        path
+    })
+    .clone()
 }
 
 /// Verify a batch of candidates.
@@ -167,6 +180,22 @@ mod tests {
             completion: completion.to_string(),
             run_tests: true,
         })
+    }
+
+    /// The harness used to be rewritten at a fixed shared path on every call, so
+    /// parallel callers could hand `python3` a half-written file. Eight threads
+    /// now evaluate at once and every verdict must still be a pass.
+    #[test]
+    fn concurrent_evaluations_do_not_share_a_half_written_harness() {
+        let handles: Vec<_> = (0..8)
+            .map(|_| std::thread::spawn(|| check("\n    return x + 1\n")))
+            .collect();
+
+        for handle in handles {
+            let evaluation = handle.join().expect("the evaluator thread panicked");
+            assert_eq!(evaluation.status, "passed", "{}", evaluation.message);
+            assert_eq!(evaluation.tests_passed, 3);
+        }
     }
 
     #[test]

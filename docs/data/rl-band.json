@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "question": "Where is the capability band in which RLOO has any reward signal to learn from?",
+  "method": "For each checkpoint of the 400-step pretraining run, run 8 prompt groups x 16 rollouts (128 rollouts) and count groups containing at least one exactly-correct completion. A group with no exact completion contributes no learning signal.",
+  "probe": [
+    { "step": 100, "groups": 96, "groups_with_signal": 4, "note": "from the earlier 96-group run, not this probe" },
+    { "step": 120, "groups": 8, "groups_with_signal": 0, "rollouts": 128 },
+    { "step": 140, "groups": 8, "groups_with_signal": 0, "rollouts": 128 },
+    { "step": 160, "groups": 8, "groups_with_signal": 0, "rollouts": 128 },
+    { "step": 180, "groups": 8, "groups_with_signal": 0, "rollouts": 128 },
+    { "step": 200, "groups": 8, "groups_with_signal": 8, "note": "implied by dev pass@1 29/32; every reward in the 200-step screen was positive" }
+  ],
+  "tokens_per_step": 2048,
+  "findings": [
+    "Every probe from step 100 to step 180 returned rewards of exactly -0.1, the invalid-completion penalty. Not one of 512 rollouts parsed and passed.",
+    "At step 200 the dev split is 29/32, so nearly every rollout passes and the advantage collapses to noise.",
+    "The usable band therefore lies inside the 180-200 interval: narrower than one 20-step checkpoint spacing. That is why the eight-arm screen at step 200 measured nothing, and why the 100-step checkpoint (4 signal groups out of 96) could not learn either.",
+    "The reference's selected checkpoint saw 345,995 tokens at step 100 with batch 32. Our batch is 16, so our step 100 saw 204,800 tokens. Comparing at equal steps is not comparing at equal training: our step-100 model is roughly 1.7x less trained than theirs, and the band should be sought at equal tokens (about step 170 here)."
+  ],
+  "recommendation": "Retrain with seeded initialization, checkpoint every 5 steps from 160 to 200, and select the checkpoint by measured exact-rollout rate on the RL prompts rather than by dev pass@1. Matching the reference's token budget means batch 32 or step ~170."
+}

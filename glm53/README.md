@@ -18,7 +18,7 @@ executable unit-test rewards.
 | Tokenizer | byte-level, 260 tokens | same | |
 | Evaluator | AST allowlist + executable tests | same | via a `python3` harness |
 | Training | pretrain + RLOO | same | |
-| Vision path | patch encoder + projector | not ported | see below |
+| Vision path | patch encoder + projector | same | 263-token vocabulary; see below |
 
 ```text
 bytes -> embedding -> four residual streams
@@ -45,7 +45,16 @@ bytes -> embedding -> four residual streams
   that matters most: a subtly wrong gradient still produces a falling loss curve.
 - **Checkpoints round-trip**, both backends agree to 1e-4, and a fixed prompt is
   deterministic.
-- **82 tests** across the library and the integration suite.
+- **Initialization is seeded** at every model construction. Before that, the same
+  arm and seed started from different weights on every run — which moved a
+  10-seed study's p-value from 0.008 to 0.43. A test now fails if two identical
+  runs diverge. That test is marked ignored because `Device::seed` is
+  process-global and the harness runs tests in parallel, so another test can draw
+  from the same device between the seed and the construction; run
+  `cargo test -- --ignored --test-threads=1` to exercise it. The study CLI is
+  single-threaded, so the studies themselves are deterministic.
+- **97 tests** across the library and the integration suite, one of them ignored
+  (see the checkpoint-resume gap below).
 
 ## Results
 
@@ -151,10 +160,22 @@ unchanged to 1e-5 after the vocabulary is widened.
 
 ![Both image paths and the 25M pilot](../docs/vision.webp)
 
-At this scale the **direct-patch baseline wins**, 86.5% against 73.5% on held-out
-digits. That is what the reference reports too (189/200 against 119/200), and it is
-reported rather than tuned away: added structure did not pay for itself on a
-60k-parameter budget.
+At this scale the **direct-patch baseline wins**, and it wins in every seed we ran:
+87.5% against 56-76.5% for the faithful tower on held-out digits.
+
+The reference's own run reproduces closely. Using the reference implementation itself
+(PyTorch, CPU, same config), the faithful tower scored **112/200 (56.0%)** and the
+baseline **187/200 (93.5%)**; our faithful tower scored **112/200 (56.0%)** and the
+baseline **175/200 (87.5%)**. The faithful towers agree to the example, which is the
+strongest evidence that the port is faithful.
+
+**One seed is not enough to rank these architectures.** Across seeds 42, 7 and 13 at
+width 24 the faithful tower scored 56.0%, 72.5% and 61.0% (mean 63.2, sd 8.5), while
+the baseline held 87.5%. Widening the tower does not help monotonically: 24/48/64
+hidden units give 63.2 / 48.2 / 42.8 (sd 8.5 / 25.4 / 22.0), and individual seeds
+range from 21% to 76.5%. So the direction is solid — added structure does not pay for
+itself at a 60k-parameter budget — but any single-seed difference, including the
+reference's 119/200 against 189/200, is one draw from a wide distribution.
 
 The full-model pilot attaches the tower to the 25.7M language model and freezes
 everything except the vision tower, the last block, the final norm and the tied
@@ -169,19 +190,46 @@ presentation changing.
 
 ![Data diversity and curriculum ordering](../docs/experiments.webp)
 
-Ten paired seeds, 200 steps, batch 24:
+Ten paired seeds, 200 steps, batch 24, with initialization seeded per arm so all
+arms start from the same weights for a given seed:
 
 | Study | Result |
 | --- | --- |
-| Data diversity, 32 vs 8 structures | +3.8 points (95% CI +1.9 to +6.3), permutation p = 0.0039, Holm p = 0.0078 |
-| Data diversity, 88 vs 8 structures | +1.7 points (95% CI -1.0 to +4.4), Holm p = 0.30 |
-| Blocked vs curriculum ordering | -9.3 points (95% CI -11.4 to -7.0), p = 0.0020, Holm p = 0.0039 |
-| Interleaved vs curriculum | -1.6 points (95% CI -3.3 to -0.03), Holm p = 0.10 |
+| Data diversity, 16 vs 8 structures | +2.20 points (95% CI +0.3 to +4.5), permutation p = 0.078, Holm p = 0.31 |
+| Data diversity, 32 vs 8 structures | +2.35 points (95% CI +0.3 to +4.9), p = 0.0625, Holm p = 0.31 |
+| Data diversity, 48 vs 8 structures | +2.84 points (95% CI +0.02 to +6.4), p = 0.14, Holm p = 0.43 |
+| Data diversity, 64 vs 8 structures | +1.65 points (95% CI -1.0 to +4.4), Holm p = 0.59 |
+| Data diversity, 88 vs 8 structures | +1.81 points (95% CI -1.1 to +5.3), Holm p = 0.59 |
 
-Two effects survive Holm correction. The diversity gain is not monotonic: 88
-structures (58.0%) is not separable from 8 (56.4%), so the reference's "more unique
-data is better" holds only up to 32 here. Exact-expression accuracy was 0% in every
-arm.
+**No diversity effect survives Holm correction.** The point estimates are consistently
+positive (+1.6 to +2.8 points) and peak around 32-48 structures, but ten seeds cannot
+separate any arm from 8. Exact-expression accuracy was 0% in every arm.
+
+**Correction.** An earlier run reported +3.8 points with Holm p = 0.0078 for 32 vs 8.
+That number was not reproducible: model initialization was never seeded, so each arm
+and seed started from different weights and the pairing was only in the data. With the
+fix, the same comparison is +2.35 points at Holm p = 0.31. The initialization variance
+was larger than the effect being measured.
+
+### Curriculum and ordering
+
+The same examples, the same budget, only the presentation order changes:
+
+| Arm | Mean byte accuracy | sd |
+| --- | --- | --- |
+| curriculum 8 to 88 | 58.9% | 2.1 |
+| diverse-interleaved | 58.5% | 2.0 |
+| diverse-blocked | 50.2% | 2.5 |
+
+| Comparison | Result |
+| --- | --- |
+| Blocked vs interleaved | -8.77 points (95% CI -10.4 to -7.3), p = 0.0020, Holm p = 0.0039 |
+| Interleaved vs curriculum | -0.39 points (95% CI -1.9 to +1.1), Holm p = 0.65 |
+
+**Blocked ordering is the one robust result in the study set.** Presenting the same
+examples in blocks costs 8.8 points against interleaving them, and it survives Holm
+correction in every run we have made. Curriculum ordering and interleaving are
+indistinguishable — the earlier -1.6 point gap was initialization noise.
 
 ## RL variant screen and group-size confirmation
 
@@ -294,6 +342,20 @@ rejection rules, the linear-attention equivalence, generation determinism, the
 MoE usage distribution, routed-only gradients, sparse-vs-dense dispatch, the
 finite-difference gradient check, checkpoint round-trips and the cross-backend
 differential.
+
+The statistics are pinned against hand-computed values — exact McNemar tails,
+exhaustive paired permutation, Holm step-down and the bootstrap interval — so a
+silent change in an analyzer fails a test instead of altering a published table.
+The sequence-length boundary is tested explicitly: `time == max_sequence_length`
+runs, `time == max + 1` panics with a message naming the limit.
+
+**Known gap: no exact resume.** Checkpoints carry weights only. `TrainConfig::start_step`
+now replays the sampler so a continued run sees the batches it would have seen, which
+moved the divergence after two steps from `max |delta| = 2.786e-3` to `2.766e-3` over
+26k parameters — so the data order accounts for under 1% of it and the missing AdamW
+moments are essentially the whole gap. Burn's `AdamW` exposes no state and is not a
+`Module`, so closing this needs a state accessor in `burn-optim` rather than a change
+here. `tests/resume_check.rs` holds the requirement as an ignored test.
 
 ## License
 

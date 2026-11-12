@@ -33,6 +33,13 @@ pub struct TrainConfig {
     pub checkpoints: Vec<usize>,
     /// Where checkpoints are written. `None` skips checkpointing.
     pub artifact_dir: Option<String>,
+    /// Steps already taken before this call.
+    ///
+    /// The sampler is advanced by `start_step * batch_size` draws so a continued
+    /// run sees the batches it would have seen without the interruption. The
+    /// optimizer still restarts, which is the part a checkpoint cannot restore
+    /// today (see the resume gap in the README).
+    pub start_step: usize,
 }
 
 impl Default for TrainConfig {
@@ -50,6 +57,7 @@ impl Default for TrainConfig {
             log_every: 25,
             checkpoints: Vec::new(),
             artifact_dir: None,
+            start_step: 0,
         }
     }
 }
@@ -76,8 +84,12 @@ pub fn train(
 
     let mut optimizer = AdamWConfig::new().init();
     let mut rng = Rng::new(config.seed ^ 0x5DEECE66D);
+    // Replay the sampler so the data order continues rather than restarting.
+    for _ in 0..config.start_step.saturating_mul(config.batch_size) {
+        rng.below(corpus.len());
+    }
 
-    for step in 1..=config.steps {
+    for step in (config.start_step + 1)..=(config.start_step + config.steps) {
         let documents: Vec<Document> = (0..config.batch_size)
             .map(|_| {
                 corpus
@@ -106,7 +118,10 @@ pub fn train(
         let grads = GradientsParams::from_grads(grads, &model);
         model = optimizer.step(config.learning_rate, model, grads);
 
-        if step % config.log_every == 0 || step == 1 || step == config.steps {
+        // `log_every == 0` disables periodic logging; without the guard the
+        // remainder below is a division by zero.
+        let periodic = config.log_every > 0 && step % config.log_every == 0;
+        if periodic || step == 1 || step == config.steps {
             on_step(&StepMetrics {
                 step,
                 loss: loss_value,
@@ -183,4 +198,73 @@ pub fn list_checkpoints(root: &str) -> Vec<(usize, String)> {
     }
     found.sort();
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ModelConfig;
+
+    fn tiny() -> ModelConfig {
+        ModelConfig::new()
+            .with_dim(32)
+            .with_heads(2)
+            .with_layers(1)
+            .with_experts(2)
+            .with_expert_hidden(16)
+            .with_streams(2)
+            .with_max_sequence_length(16)
+    }
+
+    /// `log_every = 0` means "no periodic logging". It used to divide by zero.
+    #[test]
+    fn zero_log_every_disables_periodic_logging() {
+        let device = Device::flex().autodiff();
+        let config = TrainConfig {
+            steps: 4,
+            batch_size: 2,
+            sequence_length: 8,
+            learning_rate: 1e-3,
+            seed: 3,
+            corpus_size: 16,
+            log_every: 0,
+            checkpoints: Vec::new(),
+            artifact_dir: None,
+            start_step: 0,
+        };
+
+        let mut seen = Vec::new();
+        let model = GLM53Flash::new(&tiny(), &device);
+        let _ = train(model, &config, &device, |metrics| seen.push(metrics.step));
+
+        assert_eq!(
+            seen,
+            vec![1, 4],
+            "only the first and last step should report"
+        );
+    }
+
+    /// Every step reports when `log_every` is 1.
+    #[test]
+    fn log_every_one_reports_every_step() {
+        let device = Device::flex().autodiff();
+        let config = TrainConfig {
+            steps: 3,
+            batch_size: 2,
+            sequence_length: 8,
+            learning_rate: 1e-3,
+            seed: 3,
+            corpus_size: 16,
+            log_every: 1,
+            checkpoints: Vec::new(),
+            artifact_dir: None,
+            start_step: 0,
+        };
+
+        let mut seen = Vec::new();
+        let model = GLM53Flash::new(&tiny(), &device);
+        let _ = train(model, &config, &device, |metrics| seen.push(metrics.step));
+
+        assert_eq!(seen, vec![1, 2, 3]);
+    }
 }
