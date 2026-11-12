@@ -1,0 +1,1146 @@
+[
+  {
+    "arm": "baseline",
+    "groups": 16,
+    "groups_with_signal": 7,
+    "exact_rollouts": 64,
+    "rollouts": 128,
+    "temperature": 0.35,
+    "group_size": 8,
+    "reward_mode": "binary",
+    "invalid_penalty": -0.1,
+    "pass_at_one": 0.6875,
+    "seconds": 100.249812891,
+    "dev_outcomes": [
+      {
+        "task_id": "dev-increment-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-double-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-absolute-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-nonnegative-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-list_sum-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-003",
+        "passed": true
+      }
+    ]
+  },
+  {
+    "arm": "partial-reward",
+    "groups": 16,
+    "groups_with_signal": 6,
+    "exact_rollouts": 65,
+    "rollouts": 128,
+    "temperature": 0.35,
+    "group_size": 8,
+    "reward_mode": "case-fraction",
+    "invalid_penalty": -0.1,
+    "pass_at_one": 0.6875,
+    "seconds": 153.169328667,
+    "dev_outcomes": [
+      {
+        "task_id": "dev-increment-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-double-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-absolute-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-nonnegative-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-list_sum-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-003",
+        "passed": true
+      }
+    ]
+  },
+  {
+    "arm": "no-penalty",
+    "groups": 16,
+    "groups_with_signal": 6,
+    "exact_rollouts": 63,
+    "rollouts": 128,
+    "temperature": 0.35,
+    "group_size": 8,
+    "reward_mode": "binary",
+    "invalid_penalty": 0.0,
+    "pass_at_one": 0.6875,
+    "seconds": 207.137380349,
+    "dev_outcomes": [
+      {
+        "task_id": "dev-increment-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-double-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-absolute-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-nonnegative-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-list_sum-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-003",
+        "passed": true
+      }
+    ]
+  },
+  {
+    "arm": "harsh-penalty",
+    "groups": 16,
+    "groups_with_signal": 7,
+    "exact_rollouts": 64,
+    "rollouts": 128,
+    "temperature": 0.35,
+    "group_size": 8,
+    "reward_mode": "binary",
+    "invalid_penalty": -1.0,
+    "pass_at_one": 0.65625,
+    "seconds": 259.485067284,
+    "dev_outcomes": [
+      {
+        "task_id": "dev-increment-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-double-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-absolute-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-nonnegative-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-list_sum-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-003",
+        "passed": true
+      }
+    ]
+  },
+  {
+    "arm": "low-temp",
+    "groups": 16,
+    "groups_with_signal": 2,
+    "exact_rollouts": 72,
+    "rollouts": 128,
+    "temperature": 0.2,
+    "group_size": 8,
+    "reward_mode": "binary",
+    "invalid_penalty": -0.1,
+    "pass_at_one": 0.65625,
+    "seconds": 316.104334972,
+    "dev_outcomes": [
+      {
+        "task_id": "dev-increment-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-double-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-absolute-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-absolute-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-nonnegative-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-list_sum-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-003",
+        "passed": true
+      }
+    ]
+  },
+  {
+    "arm": "high-temp",
+    "groups": 16,
+    "groups_with_signal": 3,
+    "exact_rollouts": 0,
+    "rollouts": 128,
+    "temperature": 0.8,
+    "group_size": 8,
+    "reward_mode": "binary",
+    "invalid_penalty": -0.1,
+    "pass_at_one": 0.65625,
+    "seconds": 389.161173015,
+    "dev_outcomes": [
+      {
+        "task_id": "dev-increment-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-double-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-absolute-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-absolute-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-nonnegative-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-list_sum-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-003",
+        "passed": true
+      }
+    ]
+  },
+  {
+    "arm": "group-4",
+    "groups": 16,
+    "groups_with_signal": 6,
+    "exact_rollouts": 32,
+    "rollouts": 64,
+    "temperature": 0.35,
+    "group_size": 4,
+    "reward_mode": "binary",
+    "invalid_penalty": -0.1,
+    "pass_at_one": 0.6875,
+    "seconds": 484.85490096,
+    "dev_outcomes": [
+      {
+        "task_id": "dev-increment-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-double-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-absolute-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-nonnegative-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-list_sum-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-003",
+        "passed": true
+      }
+    ]
+  },
+  {
+    "arm": "group-16",
+    "groups": 16,
+    "groups_with_signal": 11,
+    "exact_rollouts": 130,
+    "rollouts": 256,
+    "temperature": 0.35,
+    "group_size": 16,
+    "reward_mode": "binary",
+    "invalid_penalty": -0.1,
+    "pass_at_one": 0.625,
+    "seconds": 563.194144105,
+    "dev_outcomes": [
+      {
+        "task_id": "dev-increment-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-increment-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-double-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-double-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-square-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-absolute-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-absolute-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-nonnegative-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-even-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-even-003",
+        "passed": true
+      },
+      {
+        "task_id": "dev-reverse-000",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-001",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-002",
+        "passed": false
+      },
+      {
+        "task_id": "dev-reverse-003",
+        "passed": false
+      },
+      {
+        "task_id": "dev-list_sum-000",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-001",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-002",
+        "passed": true
+      },
+      {
+        "task_id": "dev-list_sum-003",
+        "passed": true
+      }
+    ]
+  }
+]

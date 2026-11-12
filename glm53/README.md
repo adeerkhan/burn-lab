@@ -64,8 +64,26 @@ opened once, for the final report only.
 
 ### Pretraining
 
-400 steps, batch 16 x 128 tokens, AdamW, lr 3e-4, 155 s on an RTX 5060 via
-wgpu/Vulkan. Loss 5.09 → 0.211.
+400 steps, batch 16 x 128 tokens, AdamW, lr 3e-4, on an RTX 5060 via wgpu/Vulkan.
+Loss 5.09 → 0.211.
+
+### Effective batch size
+
+The reference trained with batch 32, so its step 100 saw 345,995 tokens; ours saw
+204,800. Two micro-batches of 16 accumulated per step doubles the tokens without
+doubling the activation memory:
+
+| Run | Tokens at 400 steps | Dev pass@1 at 200 | at 400 | Peak VRAM |
+| --- | ---: | ---: | ---: | ---: |
+| 1 x 16 | 819,200 | **29/32** | 32/32 | 4.2 GiB |
+| 2 x 16 (effective 32) | 1,638,400 | 17/32 | 32/32 | 7.8 GiB |
+
+**Matching the reference's token budget did not help.** The larger effective batch has
+the same number of optimizer steps but a less noisy gradient, so at a fixed step count
+it is further behind, and both runs converge by step 400. Accumulation also cost memory
+rather than saving it (7.8 against 4.2 GiB): the first micro-batch's gradients stay
+resident while the second graph is built. Accumulation buys a larger batch, not a
+cheaper one.
 
 ### Checkpoint selection (dev, greedy pass@1)
 
@@ -169,12 +187,18 @@ baseline **187/200 (93.5%)**; our faithful tower scored **112/200 (56.0%)** and 
 baseline **175/200 (87.5%)**. The faithful towers agree to the example, which is the
 strongest evidence that the port is faithful.
 
-**One seed is not enough to rank these architectures.** Across seeds 42, 7 and 13 at
-width 24 the faithful tower scored 56.0%, 72.5% and 61.0% (mean 63.2, sd 8.5), while
-the baseline held 87.5%. Widening the tower does not help monotonically: 24/48/64
-hidden units give 63.2 / 48.2 / 42.8 (sd 8.5 / 25.4 / 22.0), and individual seeds
-range from 21% to 76.5%. So the direction is solid — added structure does not pay for
-itself at a 60k-parameter budget — but any single-seed difference, including the
+**Five seeds, because one is not enough to rank these architectures.** Seeds 42, 7,
+13, 21 and 34, 120 steps, 200 held-out examples:
+
+| Configuration | Mean | sd | Per-seed |
+| --- | ---: | ---: | --- |
+| Direct-patch baseline (42,500 params) | **92.7%** | 5.6 | 95.5, 85.0, 100, 91.5, 91.5 |
+| Faithful, width 24 (60,924 params) | 55.6% | 17.6 | 31.0, 72.0, 58.0, 71.5, 45.5 |
+| Faithful, width 48 (101,844 params) | 48.7% | 16.1 | 22.0, 60.0, 45.5, 61.0, 55.0 |
+
+The direction is unambiguous — added structure does not pay for itself at this budget,
+and widening the tower makes it worse, not better. But the faithful tower's seed-to-seed
+sd is three times the baseline's, so any single-seed difference, including the
 reference's 119/200 against 189/200, is one draw from a wide distribution.
 
 The full-model pilot attaches the tower to the 25.7M language model and freezes
@@ -226,47 +250,74 @@ The same examples, the same budget, only the presentation order changes:
 | Blocked vs interleaved | -8.77 points (95% CI -10.4 to -7.3), p = 0.0020, Holm p = 0.0039 |
 | Interleaved vs curriculum | -0.39 points (95% CI -1.9 to +1.1), Holm p = 0.65 |
 
+The two factors do not interact. Crossing them at 8 and 48 structures, ten seeds:
+
+| | 8 structures | 48 structures |
+| --- | ---: | ---: |
+| Interleaved | 57.6% | 60.7% |
+| Blocked | 39.4% | 44.3% |
+| Cost of blocking | **-18.2 pts** | **-16.4 pts** |
+
+The difference in differences is **+1.8 points (95% CI -0.7 to +4.3, p = 0.23)**: the
+cost of blocked ordering is the same whether the corpus holds 8 structures or 48, so
+this is one mechanism, not two findings wearing the same name.
+
 **Blocked ordering is the one robust result in the study set.** Presenting the same
 examples in blocks costs 8.8 points against interleaving them, and it survives Holm
 correction in every run we have made. Curriculum ordering and interleaving are
 indistinguishable — the earlier -1.6 point gap was initialization noise.
 
-## RL variant screen and group-size confirmation
+## RL: where is the reward signal, and does any arm move it?
 
-Eight arms from one checkpoint, one design choice changed at a time, 16 groups x 8
-rollouts each, scored on 32 dev tasks:
+The earlier screen ran at the 200-step checkpoint and every arm tied. That was not a
+fact about RLOO: dev was already 29/32, so nearly every rollout passed and the
+advantage was noise. So measure the signal first. Sampled pass@16 on the RL split, 512
+rollouts per checkpoint, all from one seeded run:
 
-| Arm | Groups with signal | Exact rollouts | Dev pass@1 |
+| Step | Exact rollouts | Step | Exact rollouts |
+| ---: | ---: | ---: | ---: |
+| 100 | 3.3% | 150 | 38.9% |
+| 110 | 2.1% | 160 | 67.6% |
+| 120 | 10.7% | 170 | 74.6% |
+| 130 | 16.8% | 180 | 84.6% |
+| 140 | **33.6%** | 200 | 86.7% |
+
+The band is early and narrow. Step 140 gives 33.6% exact rollouts (pass@16 47%), the
+closest to a balanced reward, and the screen runs there.
+
+### Eight arms inside the band
+
+16 groups x 8 rollouts, 32 dev tasks, from the step-140 checkpoint. The baseline arm
+saw signal in 7 of 16 groups and 64 of 128 rollouts were exactly correct, so the arms
+had something to learn from.
+
+| Arm | Signal | Exact | Dev pass@1 |
 | --- | --- | --- | --- |
-| baseline (binary, -0.1, T=0.35, group 8) | 4/16 | 100/128 | 0.906 |
-| partial-test reward | 4/16 | 100/128 | 0.906 |
-| invalid penalty 0 | 1/16 | 100/128 | 0.906 |
-| invalid penalty -1 | 3/16 | 100/128 | **0.938** |
-| temperature 0.20 | 2/16 | 104/128 | **0.938** |
-| temperature 0.80 | 1/16 | 0/128 | 0.906 |
-| group size 4 | 2/16 | 50/64 | 0.906 |
-| group size 16 | 4/16 | 200/256 | 0.906 |
+| baseline (binary, -0.1, T=0.35, group 8) | 7/16 | 64/128 | 0.688 |
+| partial-test reward | 6/16 | 65/128 | 0.688 |
+| invalid penalty 0 | 6/16 | 63/128 | 0.688 |
+| invalid penalty -1 | 7/16 | 64/128 | 0.656 |
+| temperature 0.20 | 2/16 | 72/128 | 0.656 |
+| temperature 0.80 | 3/16 | 0/128 | 0.656 |
+| group size 4 | 6/16 | 32/64 | 0.688 |
+| group size 16 | 11/16 | 130/256 | 0.625 |
 
-The group arms see 64 and 256 rollouts respectively for the same 16 prompts, so
-their exact counts are not comparable to the group-8 arms' 128.
+| Arm | only arm | only reference | mean difference | Holm p |
+| --- | ---: | ---: | ---: | ---: |
+| partial-reward | 0 | 0 | +0.000 | 1.000 |
+| no-penalty | 0 | 0 | +0.000 | 1.000 |
+| harsh-penalty | 0 | 1 | -0.031 | 1.000 |
+| low-temp | 0 | 1 | -0.031 | 1.000 |
+| high-temp | 0 | 1 | -0.031 | 1.000 |
+| group-4 | 0 | 0 | +0.000 | 1.000 |
+| group-16 | 0 | 2 | -0.062 | 1.000 |
 
-Exact McNemar over paired dev tasks puts every arm at Holm p = 1.00: two arms move
-one task, and one task out of 32 is noise. That is the same wall as before — the
-policy sits above the capability band, so there is almost nothing for a design
-choice to change.
-
-**Group-size confirmation.** Group 4 against group 8 over three seeds and 12 groups
-each:
-
-| Seed | Group 4 | Group 8 | Difference | McNemar p |
-| --- | --- | --- | --- | --- |
-| 11 | 0.938 | 0.906 | -0.031 | 1.000 |
-| 22 | 0.906 | 0.938 | +0.031 | 1.000 |
-| 33 | 0.906 | 0.906 | 0.000 | 1.000 |
-
-Seed mean +0.000, task-level 95% CI -0.031 to +0.031. Group 4 won one seed, lost
-one and tied one — which is exactly the reference's own conclusion when its dev
-winner failed to replicate.
+**No arm separates: every comparison is Holm p = 1.00 and the largest difference is two
+tasks out of 32.** This null is not a placement artefact — the policy solves half its
+rollouts from the same prompt and still none of RLOO's design choices move greedy dev
+accuracy. At 25.7M parameters on eight operation families, the design surface of the
+algorithm is flat. With 32 dev tasks, exact McNemar needs six net discordant tasks for
+p < 0.05; two is noise by construction.
 
 ## Receipts
 

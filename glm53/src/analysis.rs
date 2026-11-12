@@ -152,6 +152,9 @@ pub struct Analysis {
     pub arms: Vec<ArmSummary>,
     pub comparisons: Vec<Comparison>,
     pub reference_arm: String,
+    /// Present only for the ordering x diversity 2x2.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interaction: Option<InteractionContrast>,
     pub note: String,
 }
 
@@ -235,6 +238,7 @@ pub fn analyze(report: &StudyReport) -> Analysis {
         arms: summaries,
         comparisons,
         reference_arm: reference,
+        interaction: ordering_diversity_interaction(report),
         note:
             "Paired by seed. Permutation p is two-sided; the adjusted p is Holm-corrected across \
                the comparisons against the reference arm."
@@ -918,4 +922,108 @@ mod golden_tests {
         close(low, 0.0);
         close(high, 0.0);
     }
+}
+
+/// One cell of the ordering x diversity 2x2.
+#[derive(Clone, Debug, Serialize)]
+pub struct InteractionCell {
+    pub arm: String,
+    pub mean_byte_accuracy: f64,
+    pub std_byte_accuracy: f64,
+}
+
+/// The difference-in-differences for ordering across two diversity levels.
+#[derive(Clone, Debug, Serialize)]
+pub struct InteractionContrast {
+    pub cells: Vec<InteractionCell>,
+    /// `(blocked_high - interleaved_high) - (blocked_low - interleaved_low)`.
+    pub contrast: f64,
+    pub ci_low: f64,
+    pub ci_high: f64,
+    pub permutation_p: f64,
+    pub note: String,
+}
+
+/// Detect a 2x2 ordering x diversity study and compute its interaction.
+///
+/// Returns `None` for any other study shape, so the ordinary analyses are
+/// unaffected.
+pub fn ordering_diversity_interaction(report: &StudyReport) -> Option<InteractionContrast> {
+    let mut splits: Vec<(String, usize)> = Vec::new();
+    for arm in &report.arms {
+        let (order, count) = arm.rsplit_once('-')?;
+        if order != "blocked" && order != "interleaved" {
+            return None;
+        }
+        splits.push((order.to_string(), count.parse().ok()?));
+    }
+    let mut levels: Vec<usize> = splits.iter().map(|(_, count)| *count).collect();
+    levels.sort_unstable();
+    levels.dedup();
+    if levels.len() != 2 || splits.len() != 4 {
+        return None;
+    }
+    let (low, high) = (levels[0], levels[1]);
+    let name = |order: &str, level: usize| format!("{order}-{level}");
+
+    let value = |arm: &str, seed: u64| {
+        report
+            .runs
+            .iter()
+            .find(|run| run.arm == arm && run.seed == seed)
+            .map(|run| run.after.target_byte_accuracy)
+    };
+
+    let mut seeds: Vec<u64> = report.runs.iter().map(|run| run.seed).collect();
+    seeds.sort_unstable();
+    seeds.dedup();
+
+    let mut differences = Vec::new();
+    for seed in seeds {
+        let get = |order: &str, level: usize| value(&name(order, level), seed);
+        let (Some(bl), Some(il), Some(bh), Some(ih)) = (
+            get("blocked", low),
+            get("interleaved", low),
+            get("blocked", high),
+            get("interleaved", high),
+        ) else {
+            continue;
+        };
+        differences.push((bh - ih) - (bl - il));
+    }
+    if differences.is_empty() {
+        return None;
+    }
+
+    let cells = report
+        .arms
+        .iter()
+        .map(|arm| {
+            let values: Vec<f64> = report
+                .runs
+                .iter()
+                .filter(|run| run.arm == *arm)
+                .map(|run| run.after.target_byte_accuracy)
+                .collect();
+            InteractionCell {
+                arm: arm.clone(),
+                mean_byte_accuracy: mean(&values),
+                std_byte_accuracy: std(&values),
+            }
+        })
+        .collect();
+
+    let (ci_low, ci_high) = bootstrap_ci(&differences, 10_000, 0x1DEA);
+    Some(InteractionContrast {
+        cells,
+        contrast: mean(&differences),
+        ci_low,
+        ci_high,
+        permutation_p: paired_permutation_p(&differences),
+        note: format!(
+            "Difference in differences in byte accuracy: the blocked-vs-interleaved gap at \
+             {high} structures minus the gap at {low}. Negative means blocked ordering hurts \
+             more when there are more unique structures."
+        ),
+    })
 }

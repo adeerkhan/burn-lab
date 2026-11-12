@@ -44,6 +44,7 @@ fn tiny() -> ModelConfig {
 fn train_config(steps: usize) -> TrainConfig {
     TrainConfig {
         start_step: 0,
+        accumulation_steps: 1,
         steps,
         batch_size: 2,
         sequence_length: 12,

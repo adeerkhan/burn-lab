@@ -97,6 +97,19 @@ impl Rng {
         (self.next_u64() % bound as u64) as usize
     }
 
+    /// A value in `[0, 1)`.
+    pub fn unit(&mut self) -> f64 {
+        // 53 bits of mantissa, so the value is uniform on the representable grid.
+        ((self.next_u64() >> 11) as f64) / ((1u64 << 53) as f64)
+    }
+
+    /// A standard normal draw (Box-Muller).
+    pub fn normal(&mut self) -> f64 {
+        let u1 = self.unit().max(f64::MIN_POSITIVE);
+        let u2 = self.unit();
+        (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
+    }
+
     /// A random lower-case letter.
     pub fn letter(&mut self) -> char {
         (b'a' + self.below(26) as u8) as char

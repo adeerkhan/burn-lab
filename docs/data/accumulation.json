@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "question": "Does matching the reference's token budget with gradient accumulation help at a fixed step count?",
+  "runs": [
+    {
+      "name": "1x16",
+      "batch": 16,
+      "accumulation": 1,
+      "tokens_at_400": 819200,
+      "dev_at_200": "29/32",
+      "dev_at_400": "32/32",
+      "peak_vram_gib": 4.2,
+      "seconds": 65.5
+    },
+    {
+      "name": "2x16",
+      "batch": 16,
+      "accumulation": 2,
+      "tokens_at_400": 1638400,
+      "dev_at_200": "17/32",
+      "dev_at_400": "32/32",
+      "peak_vram_gib": 7.8,
+      "seconds": 226.2
+    }
+  ],
+  "equivalence_check": {
+    "loss_delta": 9e-07,
+    "max_relative_parameter_delta": 0.00013
+  },
+  "finding": "Accumulation produced the same step as one larger batch (verified) but a larger effective batch needs more steps: at 200 steps it is 12 tasks behind, and by 400 both saturate. It also costs memory rather than saving it."
+}

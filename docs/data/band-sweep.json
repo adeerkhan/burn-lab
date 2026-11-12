@@ -1,0 +1,91 @@
+{
+  "schema_version": "1.0",
+  "question": "At which pretraining step does RLOO have a usable reward signal?",
+  "method": "Sampled pass@16 on the RL split (512 rollouts per checkpoint) after a seeded 200-step run; the fraction of rollouts that are exactly correct is the reward signal rate.",
+  "checkpoints": [
+    {
+      "step": 100,
+      "exact_rollout_rate": 0.0332,
+      "pass_at_16": 0.0938,
+      "rollouts": 512
+    },
+    {
+      "step": 110,
+      "exact_rollout_rate": 0.0215,
+      "pass_at_16": 0.0625,
+      "rollouts": 512
+    },
+    {
+      "step": 120,
+      "exact_rollout_rate": 0.1074,
+      "pass_at_16": 0.25,
+      "rollouts": 512
+    },
+    {
+      "step": 130,
+      "exact_rollout_rate": 0.168,
+      "pass_at_16": 0.25,
+      "rollouts": 512
+    },
+    {
+      "step": 140,
+      "exact_rollout_rate": 0.3359,
+      "pass_at_16": 0.4688,
+      "rollouts": 512
+    },
+    {
+      "step": 150,
+      "exact_rollout_rate": 0.3887,
+      "pass_at_16": 0.5938,
+      "rollouts": 512
+    },
+    {
+      "step": 160,
+      "exact_rollout_rate": 0.6758,
+      "pass_at_16": 0.8125,
+      "rollouts": 512
+    },
+    {
+      "step": 170,
+      "exact_rollout_rate": 0.7461,
+      "pass_at_16": 0.8438,
+      "rollouts": 512
+    },
+    {
+      "step": 180,
+      "exact_rollout_rate": 0.8457,
+      "pass_at_16": 0.875,
+      "rollouts": 512
+    },
+    {
+      "step": 185,
+      "exact_rollout_rate": 0.8438,
+      "pass_at_16": 0.875,
+      "rollouts": 512
+    },
+    {
+      "step": 190,
+      "exact_rollout_rate": 0.8418,
+      "pass_at_16": 0.8438,
+      "rollouts": 512
+    },
+    {
+      "step": 195,
+      "exact_rollout_rate": 0.873,
+      "pass_at_16": 0.875,
+      "rollouts": 512
+    },
+    {
+      "step": 200,
+      "exact_rollout_rate": 0.8672,
+      "pass_at_16": 0.875,
+      "rollouts": 512
+    }
+  ],
+  "selected": {
+    "step": 140,
+    "exact_rollout_rate": 0.336,
+    "reason": "Closest to a balanced reward: about a third of rollouts pass, so advantage estimates carry variance without the task being either impossible or solved."
+  },
+  "finding": "The band is at steps 140-150, not at 100 or 200. It is narrow: 2% exact at step 110, 34% at 140, 85% by 180. Two of the ten RL probes crashed with SIGSEGV/SIGABRT before reporting (see GLM-024), so the sweep was repeated with evaluate-passk."
+}

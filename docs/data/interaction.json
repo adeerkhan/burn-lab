@@ -1,0 +1,99 @@
+{
+  "schema_version": "1.0",
+  "research_question": "Does the cost of blocked ordering depend on how many unique structures there are?",
+  "independent_variable": "ordering crossed with structure diversity",
+  "arms": [
+    {
+      "arm": "interleaved-8",
+      "seeds": 10,
+      "mean_byte_accuracy": 0.5756388415672913,
+      "mean_exact_accuracy": 0.0,
+      "mean_loss": 1.2934904960594955,
+      "std_byte_accuracy": 0.022463837006908766
+    },
+    {
+      "arm": "blocked-8",
+      "seeds": 10,
+      "mean_byte_accuracy": 0.393526405451448,
+      "mean_exact_accuracy": 0.0,
+      "mean_loss": 2.0642629716018592,
+      "std_byte_accuracy": 0.03520726859738785
+    },
+    {
+      "arm": "interleaved-48",
+      "seeds": 10,
+      "mean_byte_accuracy": 0.6066439522998296,
+      "mean_exact_accuracy": 0.0,
+      "mean_loss": 1.2416863473757362,
+      "std_byte_accuracy": 0.02090230908517181
+    },
+    {
+      "arm": "blocked-48",
+      "seeds": 10,
+      "mean_byte_accuracy": 0.4425894378194208,
+      "mean_exact_accuracy": 0.0,
+      "mean_loss": 1.7288184081066202,
+      "std_byte_accuracy": 0.03974040604384869
+    }
+  ],
+  "comparisons": [
+    {
+      "arm": "blocked-8",
+      "against": "interleaved-8",
+      "mean_difference": -0.18211243611584327,
+      "ci_low": -0.20851788756388415,
+      "ci_high": -0.15775127768313457,
+      "permutation_p": 0.001953125,
+      "adjusted_p": 0.005859375
+    },
+    {
+      "arm": "interleaved-48",
+      "against": "interleaved-8",
+      "mean_difference": 0.031005110732538355,
+      "ci_low": 0.013969335604770029,
+      "ci_high": 0.04667802385008522,
+      "permutation_p": 0.013671875,
+      "adjusted_p": 0.013671875
+    },
+    {
+      "arm": "blocked-48",
+      "against": "interleaved-8",
+      "mean_difference": -0.13304940374787053,
+      "ci_low": -0.16252129471890972,
+      "ci_high": -0.10391822827938672,
+      "permutation_p": 0.001953125,
+      "adjusted_p": 0.005859375
+    }
+  ],
+  "reference_arm": "interleaved-8",
+  "interaction": {
+    "cells": [
+      {
+        "arm": "interleaved-8",
+        "mean_byte_accuracy": 0.5756388415672913,
+        "std_byte_accuracy": 0.022463837006908766
+      },
+      {
+        "arm": "blocked-8",
+        "mean_byte_accuracy": 0.393526405451448,
+        "std_byte_accuracy": 0.03520726859738785
+      },
+      {
+        "arm": "interleaved-48",
+        "mean_byte_accuracy": 0.6066439522998296,
+        "std_byte_accuracy": 0.02090230908517181
+      },
+      {
+        "arm": "blocked-48",
+        "mean_byte_accuracy": 0.4425894378194208,
+        "std_byte_accuracy": 0.03974040604384869
+      }
+    ],
+    "contrast": 0.018057921635434376,
+    "ci_low": -0.006473594548551992,
+    "ci_high": 0.04344122657580918,
+    "permutation_p": 0.23046875,
+    "note": "Difference in differences in byte accuracy: the blocked-vs-interleaved gap at 48 structures minus the gap at 8. Negative means blocked ordering hurts more when there are more unique structures."
+  },
+  "note": "Paired by seed. Permutation p is two-sided; the adjusted p is Holm-corrected across the comparisons against the reference arm."
+}

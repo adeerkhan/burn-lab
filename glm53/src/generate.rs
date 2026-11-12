@@ -92,7 +92,7 @@ pub fn generate_group(
     let mut completions: Vec<Vec<u32>> = vec![Vec::new(); config.group_size];
     let mut finished = vec![false; config.group_size];
 
-    device.seed(config.seed);
+    let _session = crate::seeding::rng_session(device, config.seed);
     let blocked = blocked_bias(model.config().vocab_size, device);
 
     for _ in 0..config.max_new_tokens {
@@ -184,7 +184,7 @@ pub fn generate_raw(
 ) -> String {
     let tokenizer = ByteTokenizer::new();
     let mut tokens = tokenizer.encode(prompt, true, false);
-    device.seed(config.seed);
+    let _session = crate::seeding::rng_session(device, config.seed);
 
     let blocked = blocked_bias(model.config().vocab_size, device);
 

@@ -101,46 +101,29 @@ initialization seeded per arm. Results after the fix:
 - **Ordering: blocked loses, and that is robust.** Presenting the same examples in
   blocks costs **-8.77 points** against interleaving (Holm p = 0.0039), stable across
   every run. Curriculum ordering and interleaving are indistinguishable (Holm p = 0.65).
+- **The two factors do not interact.** Crossing ordering with 8 versus 48 structures
+  gives a difference in differences of +1.8 points (95% CI -0.7 to +4.3, p = 0.23):
+  blocking costs 18.2 points at 8 structures and 16.4 at 48.
 
 Exact-expression accuracy was 0% throughout: this measures partial next-byte learning,
 not program generation.
 
-## RL variant screen and group-size confirmation
+## RL: the band, and the screen inside it
 
-Eight arms from one checkpoint, one design choice changed at a time, 16 groups x 8
-rollouts each, scored on 32 dev tasks:
+The earlier screen ran at step 200 and every arm tied — but dev was already 29/32, so
+almost every rollout passed and the advantage was noise. Measuring the reward signal
+first (sampled pass@16, 512 rollouts per checkpoint) puts the usable band much earlier:
 
-| Arm | Groups with signal | Exact rollouts | Dev pass@1 |
-| --- | --- | --- | --- |
-| baseline (binary, -0.1, T=0.35, group 8) | 4/16 | 100/128 | 0.906 |
-| partial-test reward | 4/16 | 100/128 | 0.906 |
-| invalid penalty 0 | 1/16 | 100/128 | 0.906 |
-| invalid penalty -1 | 3/16 | 100/128 | **0.938** |
-| temperature 0.20 | 2/16 | 104/128 | **0.938** |
-| temperature 0.80 | 1/16 | 0/128 | 0.906 |
-| group size 4 | 2/16 | 50/64 | 0.906 |
-| group size 16 | 4/16 | 200/256 | 0.906 |
+| Step | 100 | 110 | 120 | 130 | **140** | 150 | 160 | 180 | 200 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Exact rollouts | 3.3% | 2.1% | 10.7% | 16.8% | **33.6%** | 38.9% | 67.6% | 84.6% | 86.7% |
 
-The group arms see 64 and 256 rollouts respectively for the same 16 prompts, so
-their exact counts are not comparable to the group-8 arms' 128.
-
-Exact McNemar over paired dev tasks puts every arm at Holm p = 1.00: two arms move
-one task, and one task out of 32 is noise. That is the same wall as before — the
-policy sits above the capability band, so there is almost nothing for a design
-choice to change.
-
-**Group-size confirmation.** Group 4 against group 8 over three seeds and 12 groups
-each:
-
-| Seed | Group 4 | Group 8 | Difference | McNemar p |
-| --- | --- | --- | --- | --- |
-| 11 | 0.938 | 0.906 | -0.031 | 1.000 |
-| 22 | 0.906 | 0.938 | +0.031 | 1.000 |
-| 33 | 0.906 | 0.906 | 0.000 | 1.000 |
-
-Seed mean +0.000, task-level 95% CI -0.031 to +0.031. Group 4 won one seed, lost
-one and tied one — which is exactly the reference's own conclusion when its dev
-winner failed to replicate.
+Re-running the eight arms at step 140 — where the baseline sees signal in 7 of 16 groups
+and half its rollouts are exactly correct — gives **every arm Holm p = 1.00, largest
+difference two of 32 tasks**. So the earlier null was placement, and this one is not:
+with a real signal present, none of RLOO's design choices move greedy dev accuracy at
+this scale. With 32 dev tasks, exact McNemar needs six net discordant tasks for
+p < 0.05.
 
 ### Why our result differs from the reference's
 

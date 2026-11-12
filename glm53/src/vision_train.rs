@@ -224,9 +224,6 @@ pub fn train_vision_with(
     let started = Instant::now();
     let language = vision_language_config();
     let vision = vision.clone();
-    // Both architectures must start from the same language model, or the
-    // faithful-versus-direct comparison carries initialisation noise.
-    device.seed(config.seed);
 
     let mut results = Vec::new();
     for architecture in architectures {
@@ -269,7 +266,11 @@ fn train_one(
     device: &Device,
     on_step: &mut dyn FnMut(&str, usize, f64),
 ) -> ArchitectureResult {
-    let mut model = VisionModel::build(architecture, language, vision, device);
+    // Both architectures are built from the same seed, so they share a language
+    // model initialisation and the comparison is paired.
+    let mut model = crate::seeding::seeded(device, config.seed, || {
+        VisionModel::build(architecture, language, vision, device)
+    });
     let parameters = model.num_params();
     let visual = model.visual_token_count();
     let inserted = model.inserted_token_count();

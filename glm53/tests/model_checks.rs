@@ -456,3 +456,152 @@ fn backends_agree() {
 
     on_cpu.assert_approx_eq::<f32>(&on_gpu, burn::tensor::Tolerance::rel_abs(1e-4, 1e-4));
 }
+
+/// Two micro-batches must produce the same step as one batch of their combined
+/// size. Without this, "effective batch 32" would be a different optimiser than
+/// the one it replaced.
+#[test]
+fn gradient_accumulation_matches_one_large_batch() {
+    let device = Device::flex().autodiff();
+    let config = ModelConfig::new()
+        .with_dim(32)
+        .with_heads(2)
+        .with_layers(1)
+        .with_experts(2)
+        .with_expert_hidden(16)
+        .with_streams(2)
+        .with_max_sequence_length(16);
+    let base = glm53::seeding::seeded_model(&config, 5, &device);
+
+    let settings = |batch_size: usize, accumulation_steps: usize| glm53::training::TrainConfig {
+        steps: 1,
+        batch_size,
+        accumulation_steps,
+        sequence_length: 8,
+        learning_rate: 1e-3,
+        seed: 5,
+        corpus_size: 64,
+        log_every: 0,
+        checkpoints: Vec::new(),
+        artifact_dir: None,
+        start_step: 0,
+    };
+
+    let mut large_loss = 0.0f32;
+    let large = glm53::training::train(base.clone(), &settings(32, 1), &device, |metrics| {
+        large_loss = metrics.loss
+    });
+
+    let mut split_loss = 0.0f32;
+    let split = glm53::training::train(base, &settings(16, 2), &device, |metrics| {
+        split_loss = metrics.loss
+    });
+
+    let a = param_vector(&large);
+    let b = param_vector(&split);
+    let max = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0f32, f32::max);
+
+    // One reduction over 32 rows and two reductions over 16 then averaged differ
+    // only by f32 reassociation, so the bar is relative to the update size the
+    // step actually applies (lr * gradient), not to the weights.
+    let scale = a.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+    println!("loss {large_loss:.7} vs {split_loss:.7}; max |delta| {max:e} on scale {scale:e}");
+    assert!(
+        (large_loss - split_loss).abs() < 1e-4,
+        "loss {large_loss} vs {split_loss}"
+    );
+    assert!(
+        max / scale < 1e-3,
+        "relative parameter delta {:e}",
+        max / scale
+    );
+}
+
+/// The host initialiser must reproduce the model's configured distribution, not
+/// the framework's default. Getting this wrong cost a full retraining run: the
+/// loss stalled at 4.9 and every checkpoint scored 0/32.
+#[test]
+fn seeded_construction_is_deterministic_and_uses_the_configured_scale() {
+    let device = Device::flex();
+    let config = tiny_config();
+    let first = glm53::seeding::seeded_model(&config, 11, &device);
+    let second = glm53::seeding::seeded_model(&config, 11, &device);
+
+    struct Matrices {
+        sd: Vec<f32>,
+    }
+
+    impl ModuleVisitor for Matrices {
+        fn visit_float<const D: usize>(&mut self, param: &Param<Tensor<D>>) {
+            let value = param.val();
+            if value.dims().len() != 2 {
+                return;
+            }
+            let data = value
+                .into_data()
+                .convert::<f32>()
+                .try_to_vec::<f32>()
+                .unwrap();
+            let mean = data.iter().sum::<f32>() / data.len() as f32;
+            let variance = data.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / data.len() as f32;
+            self.sd.push(variance.sqrt());
+        }
+    }
+
+    let mut matrices = Matrices { sd: Vec::new() };
+    first.visit(&mut matrices);
+    assert!(!matrices.sd.is_empty());
+    let mean_sd = matrices.sd.iter().sum::<f32>() / matrices.sd.len() as f32;
+    assert!(
+        (mean_sd - 0.02).abs() < 0.002,
+        "mean matrix sd {mean_sd}, expected 0.02"
+    );
+
+    assert_eq!(
+        param_vector(&first),
+        param_vector(&second),
+        "the same seed must give the same weights"
+    );
+}
+
+/// A replaced parameter must stay trainable. `Param::map` with a plain
+/// `from_data` tensor yields an inactive parameter, and `Module::train` then
+/// never enables its gradient: the loss flattens and every evaluation scores zero.
+#[test]
+fn host_initialised_parameters_are_trainable() {
+    let device = Device::flex().autodiff();
+    let config = tiny_config();
+    let before = glm53::seeding::seeded_model(&config, 3, &device);
+
+    let settings = glm53::training::TrainConfig {
+        steps: 3,
+        batch_size: 2,
+        accumulation_steps: 1,
+        sequence_length: 8,
+        learning_rate: 1e-2,
+        seed: 3,
+        corpus_size: 64,
+        log_every: 1,
+        checkpoints: Vec::new(),
+        artifact_dir: None,
+        start_step: 0,
+    };
+    let after = glm53::training::train(before.clone(), &settings, &device, |_| {});
+
+    let start = param_vector(&before);
+    let end = param_vector(&after);
+    let moved = start
+        .iter()
+        .zip(&end)
+        .filter(|(a, b)| (*a - *b).abs() > 1e-7)
+        .count();
+    assert!(
+        moved * 2 > start.len(),
+        "only {moved} of {} parameters moved in three steps",
+        start.len()
+    );
+}

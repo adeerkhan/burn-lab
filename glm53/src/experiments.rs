@@ -15,7 +15,6 @@ use serde::Serialize;
 
 use crate::{
     arithmetic::{self, Batch, Score, Structure},
-    model::GLM53Flash,
     tokenizer::ByteTokenizer,
     vision_train::masked_cross_entropy,
 };
@@ -156,6 +155,44 @@ pub fn curriculum_order(
     )
 }
 
+/// The 2x2: presentation order crossed with the number of unique structures.
+///
+/// The two studies above vary one factor each. If blocked ordering hurts only
+/// when structures are few, the two findings are one finding; if the cost is the
+/// same at 8 and 48 structures, ordering is independent of diversity.
+pub fn ordering_diversity(
+    diversities: &[usize],
+    config: &StudyConfig,
+    device: &Device,
+) -> StudyReport {
+    let structures = arithmetic::all_structures();
+    let train_pool: Vec<Structure> = structures[..88].to_vec();
+    let eval_pool: Vec<Structure> = structures[88..120].to_vec();
+    let total = config.steps * config.batch_size;
+
+    let mut arms = Vec::new();
+    let mut runs = Vec::new();
+    for diversity in diversities {
+        for order in ["interleaved", "blocked"] {
+            let arm = format!("{order}-{diversity}");
+            let plan = plan_for(&arm, &train_pool, total, config);
+            for seed in &config.seeds {
+                runs.push(train_arm(&arm, *seed, &plan, config, &eval_pool, device));
+            }
+            arms.push(arm);
+        }
+    }
+
+    report(
+        "Does the cost of blocked ordering depend on how many unique structures there are?",
+        "ordering crossed with structure diversity",
+        &arms,
+        &eval_pool,
+        config,
+        runs,
+    )
+}
+
 fn plan_for(
     condition: &str,
     train_pool: &[Structure],
@@ -188,6 +225,25 @@ fn plan_for(
                 })
                 .collect()
         }
+        _ if condition.starts_with("blocked-") || condition.starts_with("interleaved-") => {
+            // `blocked-N` / `interleaved-N`: the same N structures, ordered one way
+            // or the other. Not to be confused with the `diverse-*` arms above.
+            let (order, count) = condition.split_once('-').expect("order-count");
+            let count: usize = count.parse().expect("structure count");
+            let pool = &train_pool[..count];
+            let mut items: Vec<Item> = (0..total)
+                .map(|index| (pool[index % pool.len()], index))
+                .collect();
+            if order == "blocked" {
+                let rank: BTreeMap<Structure, usize> = pool
+                    .iter()
+                    .enumerate()
+                    .map(|(index, structure)| (*structure, index))
+                    .collect();
+                items.sort_by_key(|(structure, index)| (rank[structure], *index));
+            }
+            items
+        }
         other => panic!("unknown condition `{other}`"),
     }
 }
@@ -202,11 +258,10 @@ fn train_arm(
 ) -> ArmResult {
     let started = Instant::now();
     let model_config = arithmetic::miniature_config(config.sequence_length);
-    // Seed before construction: without this the initial weights depend on how
-    // many draws the device made earlier in the process, so the same (arm, seed)
-    // starts from a different point on every run and across arms.
-    device.seed(seed);
-    let mut model = GLM53Flash::new(&model_config, device);
+    // Construction seeds and holds a lock: without it the initial weights depend
+    // on how many draws the device made earlier in the process, so the same
+    // (arm, seed) starts differently across runs and across arms.
+    let mut model = crate::seeding::seeded_model(&model_config, seed, device);
 
     let mut optimizer = AdamWConfig::new()
         .with_beta_1(0.9)
@@ -412,9 +467,6 @@ mod tests {
     /// was seeded at construction the initial loss depended on how many draws the
     /// process had already made, so results differed between runs and between arms.
     #[test]
-    #[ignore = "`Device::seed` is process-global and the test harness runs in parallel, so \
-                another test can draw from the same device between the seed and the \
-                construction; run `cargo test -- --ignored --test-threads=1` to exercise it"]
     fn the_same_arm_and_seed_reproduce_exactly() {
         let device = Device::flex().autodiff();
         let config = StudyConfig {

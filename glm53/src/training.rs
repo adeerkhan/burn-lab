@@ -5,6 +5,7 @@
 
 use burn::{
     data::dataloader::batcher::Batcher,
+    module::{ModuleVisitor, Param},
     nn::loss::CrossEntropyLossConfig,
     optim::{AdamWConfig, GradientsParams},
     prelude::*,
@@ -33,6 +34,11 @@ pub struct TrainConfig {
     pub checkpoints: Vec<usize>,
     /// Where checkpoints are written. `None` skips checkpointing.
     pub artifact_dir: Option<String>,
+    /// Micro-batches summed before each optimizer step.
+    ///
+    /// `batch_size * accumulation_steps` documents are seen per step, so the
+    /// effective batch can exceed what fits in device memory.
+    pub accumulation_steps: usize,
     /// Steps already taken before this call.
     ///
     /// The sampler is advanced by `start_step * batch_size` draws so a continued
@@ -57,6 +63,7 @@ impl Default for TrainConfig {
             log_every: 25,
             checkpoints: Vec::new(),
             artifact_dir: None,
+            accumulation_steps: 1,
             start_step: 0,
         }
     }
@@ -89,34 +96,50 @@ pub fn train(
         rng.below(corpus.len());
     }
 
+    let accumulation = config.accumulation_steps.max(1);
+
     for step in (config.start_step + 1)..=(config.start_step + config.steps) {
-        let documents: Vec<Document> = (0..config.batch_size)
-            .map(|_| {
-                corpus
-                    .get(rng.below(corpus.len()))
-                    .expect("corpus index")
-                    .clone()
-            })
-            .collect();
+        let mut accumulated = GradientsParams::new();
+        let mut loss_value = 0.0f32;
+        let mut usage = None;
 
-        let batch = batcher.batch(documents, device);
-        let tokens = batch.tokens;
-        let targets = batch.targets;
-        let [batch_size, width] = tokens.dims();
+        for _ in 0..accumulation {
+            let documents: Vec<Document> = (0..config.batch_size)
+                .map(|_| {
+                    corpus
+                        .get(rng.below(corpus.len()))
+                        .expect("corpus index")
+                        .clone()
+                })
+                .collect();
 
-        let (logits, usage) = model.forward(tokens);
+            let batch = batcher.batch(documents, device);
+            let tokens = batch.tokens;
+            let targets = batch.targets;
+            let [batch_size, width] = tokens.dims();
 
-        let logits = logits.reshape::<2, _>([batch_size * width, model.config().vocab_size]);
-        let targets = targets.reshape::<1, _>([batch_size * width]);
+            let (logits, block_usage) = model.forward(tokens);
 
-        let loss = CrossEntropyLossConfig::new()
-            .init(device)
-            .forward(logits, targets);
+            let logits = logits.reshape::<2, _>([batch_size * width, model.config().vocab_size]);
+            let targets = targets.reshape::<1, _>([batch_size * width]);
 
-        let loss_value = loss.clone().into_scalar::<f32>();
-        let grads = loss.backward();
-        let grads = GradientsParams::from_grads(grads, &model);
-        model = optimizer.step(config.learning_rate, model, grads);
+            let loss = CrossEntropyLossConfig::new()
+                .init(device)
+                .forward(logits, targets);
+
+            // Each micro-batch contributes its mean loss scaled by 1/N, so the
+            // accumulated gradient is the gradient of the mean over all of them.
+            loss_value += loss.clone().into_scalar::<f32>() / accumulation as f32;
+            let micro = GradientsParams::from_grads(loss.backward(), &model);
+            model.visit(&mut Accumulate {
+                total: &mut accumulated,
+                micro,
+            });
+            usage = Some(block_usage);
+        }
+
+        model = optimizer.step(config.learning_rate, model, accumulated);
+        let usage = usage.expect("at least one micro-batch");
 
         // `log_every == 0` disables periodic logging; without the guard the
         // remainder below is a division by zero.
@@ -200,6 +223,28 @@ pub fn list_checkpoints(root: &str) -> Vec<(usize, String)> {
     found
 }
 
+/// Adds one micro-batch's gradients into a running total.
+///
+/// `GradientsParams` has no `Add`, so each parameter is visited at its own rank
+/// and the two tensors are added where both sides have one.
+struct Accumulate<'a> {
+    total: &'a mut GradientsParams,
+    micro: GradientsParams,
+}
+
+impl ModuleVisitor for Accumulate<'_> {
+    fn visit_float<const D: usize>(&mut self, param: &Param<Tensor<D>>) {
+        let id = param.id;
+        let Some(addition) = self.micro.remove::<D>(id) else {
+            return;
+        };
+        match self.total.remove::<D>(id) {
+            Some(running) => self.total.register::<D>(id, running + addition),
+            None => self.total.register::<D>(id, addition),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,6 +275,7 @@ mod tests {
             log_every: 0,
             checkpoints: Vec::new(),
             artifact_dir: None,
+            accumulation_steps: 1,
             start_step: 0,
         };
 
@@ -258,6 +304,7 @@ mod tests {
             log_every: 1,
             checkpoints: Vec::new(),
             artifact_dir: None,
+            accumulation_steps: 1,
             start_step: 0,
         };
 

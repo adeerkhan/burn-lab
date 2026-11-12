@@ -22,6 +22,7 @@ pub mod model;
 pub mod moe;
 pub mod receipt;
 pub mod rl;
+pub mod seeding;
 pub mod tasks;
 pub mod tokenizer;
 pub mod training;

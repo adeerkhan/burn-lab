@@ -111,6 +111,7 @@ struct Options {
     groups: usize,
     group_size: usize,
     tasks_per_family: usize,
+    grad_accum: usize,
     vision_width: usize,
     vision_depth: usize,
     seed: u64,
@@ -154,6 +155,7 @@ impl Default for Options {
             groups: rl.groups,
             group_size: rl.group_size,
             tasks_per_family: rl.tasks_per_family,
+            grad_accum: 1,
             vision_width: 24,
             vision_depth: 2,
             seed: 42,
@@ -182,6 +184,9 @@ impl Options {
             match key {
                 "--backend" => options.backend = value(&mut index),
                 "--steps" => options.steps = value(&mut index).parse().expect("invalid --steps"),
+                "--grad-accum" => {
+                    options.grad_accum = value(&mut index).parse().expect("invalid --grad-accum")
+                }
                 "--vision-width" => {
                     options.vision_width =
                         value(&mut index).parse().expect("invalid --vision-width")
@@ -328,16 +333,16 @@ fn main() {
             let memory = PeakMemory::start();
             let device = options.device().autodiff();
             println!("Backend: {}  Device: {device:?}", options.backend);
-            // Seed before construction so a run with the same configuration and
-            // seed starts from the same weights.
-            device.seed(options.seed);
-            let model = GLM53Flash::new(&config, &device);
+            // Seeded construction: the same configuration and seed start from the
+            // same weights, even if something else draws from the device.
+            let model = glm53::seeding::seeded_model(&config, options.seed, &device);
             print_model(&model);
 
             let train_config = TrainConfig {
                 seed: options.seed,
                 steps: options.steps,
                 batch_size: options.batch_size,
+                accumulation_steps: options.grad_accum,
                 sequence_length: options.seq_len,
                 learning_rate: options.learning_rate.unwrap_or(3e-4),
                 corpus_size: options.corpus,
@@ -348,9 +353,10 @@ fn main() {
             };
 
             println!(
-                "\nTraining {} steps, batch {}, sequence {}, lr {}",
+                "\nTraining {} steps, batch {} x {}, sequence {}, lr {}",
                 train_config.steps,
                 train_config.batch_size,
+                train_config.accumulation_steps,
                 train_config.sequence_length,
                 train_config.learning_rate
             );
@@ -953,7 +959,8 @@ fn main() {
                     .map(|part| part.trim().parse().expect("invalid --seeds"))
                     .collect(),
             };
-            let device = options.device();
+            // Studies train, so the device must track gradients.
+            let device = options.device().autodiff();
 
             let report = match options.study.as_str() {
                 "diversity" => {
@@ -982,6 +989,22 @@ fn main() {
                         );
                     }
                     report
+                }
+                "interaction" => {
+                    let levels: Vec<usize> = options
+                        .diversities
+                        .split(',')
+                        .filter(|part| !part.trim().is_empty())
+                        .map(|part| part.trim().parse().expect("invalid --diversities"))
+                        .collect();
+                    println!(
+                        "Ordering x diversity: {:?} structures x {} seeds, {} steps x batch {}",
+                        levels,
+                        config.seeds.len(),
+                        options.steps,
+                        options.batch_size
+                    );
+                    experiments::ordering_diversity(&levels, &config, &device)
                 }
                 "curriculum" => {
                     let conditions: Vec<String> = options
