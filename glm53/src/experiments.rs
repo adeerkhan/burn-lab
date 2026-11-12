@@ -225,6 +225,38 @@ fn plan_for(
                 })
                 .collect()
         }
+        "interleaved" => items,
+        "blocked" | "blocked-shuffled" => {
+            let rank: BTreeMap<Structure, usize> = train_pool
+                .iter()
+                .enumerate()
+                .map(|(index, structure)| (*structure, index))
+                .collect();
+            items.sort_by_key(|(structure, index)| (rank[structure], *index));
+            if condition == "blocked" {
+                return items;
+            }
+            // The same blocks, but the order inside each block shuffled. If this
+            // recovers the interleaved accuracy, blocking hurts because the same
+            // structure repeats; if it stays at blocked, the cost is switching.
+            let mut rng = crate::tasks::Rng::new(0xB10C_5EED);
+            let mut shuffled = Vec::with_capacity(items.len());
+            let mut start = 0usize;
+            while start < items.len() {
+                let mut end = start + 1;
+                while end < items.len() && items[end].0 == items[start].0 {
+                    end += 1;
+                }
+                let mut block: Vec<Item> = items[start..end].to_vec();
+                for index in (1..block.len()).rev() {
+                    let swap = rng.below(index + 1);
+                    block.swap(index, swap);
+                }
+                shuffled.extend(block);
+                start = end;
+            }
+            shuffled
+        }
         _ if condition.starts_with("blocked-") || condition.starts_with("interleaved-") => {
             // `blocked-N` / `interleaved-N`: the same N structures, ordered one way
             // or the other. Not to be confused with the `diverse-*` arms above.

@@ -210,6 +210,27 @@ mod tests {
         assert!(text.contains("\n    return "));
     }
 
+    /// The 64-task confirm split is a deterministic superset of the 32-task one,
+    /// so raising the power does not change the tasks already reported on.
+    #[test]
+    fn the_confirm_split_extends_deterministically() {
+        let small = frozen_tasks("confirm", 4);
+        let large = frozen_tasks("confirm", 8);
+        assert_eq!(small.len(), 32);
+        assert_eq!(large.len(), 64);
+        for task in &small {
+            assert!(
+                large.iter().any(|other| other.task_id == task.task_id),
+                "{} missing from the 64-task split",
+                task.task_id
+            );
+        }
+        let ids = |tasks: Vec<CodingTask>| -> Vec<String> {
+            tasks.into_iter().map(|task| task.task_id).collect()
+        };
+        assert_eq!(ids(large), ids(frozen_tasks("confirm", 8)));
+    }
+
     #[test]
     fn frozen_split_covers_every_family() {
         let tasks = frozen_tasks("dev", 4);
