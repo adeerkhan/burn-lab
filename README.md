@@ -100,6 +100,9 @@ initialization seeded per arm. Results after the fix:
 - **Ordering: blocked loses, and that is robust.** Presenting the same examples in
   blocks costs **-11.91 points** against interleaving (Holm p = 0.0039), stable across
   every run. Curriculum ordering and interleaving are indistinguishable (Holm p = 0.74).
+- **The reference's own studies agree.** At matched settings (200 steps, seeds 11/22/33)
+  their blocked arm scores 49.40% against our 48.15%, and their diversity arms sit within
+  about a point of ours. The ordering effect replicates across implementations.
 - **The two factors do not interact.** Crossing ordering with 8 versus 48 structures
   gives a difference in differences of +1.8 points (95% CI -0.7 to +4.3, p = 0.23):
   blocking costs 18.2 points at 8 structures and 16.4 at 48.
@@ -126,7 +129,10 @@ and half its rollouts are exactly correct — gives **every arm Holm p = 1.00, l
 difference two of 32 tasks**. So the earlier null was placement, and this one is not:
 with a real signal present, none of RLOO's design choices move greedy dev accuracy at
 this scale. With 32 dev tasks, exact McNemar needs six net discordant tasks for
-p < 0.05.
+p < 0.05. What this rules out is a design-choice effect large enough to matter at this
+scale, with a real reward signal present. It does not rule out that RLOO helps from a
+much weaker policy — the reference's starting point solved about a quarter of dev
+greedily, and no point in our band has that shape.
 
 ### Why our result differs from the reference's
 
@@ -326,6 +332,13 @@ Nothing here is asserted without a check:
 - **A golden forward fixture** on a deterministic parameter pattern, so a rewiring refactor fails loudly.
 - **The linear attention** matches a direct transcription of the reference's cumulative-sum definition.
 - **Checkpoint round-trips** and the two backends agree to 1e-4.
+
+### Decoding speed
+
+Generation now keeps a per-layer KV cache instead of recomputing the prefix. Warmed, on a
+48-token prompt with 16 rows and 24 new tokens: **6.5x faster on `flex`** (934 against
+143 tok/s) and **15.4x on `wgpu`** (356 against 23 tok/s). Cached logits match the full
+prefix within 1e-5 at every length.
 
 ## Burn versus the Python stack
 
