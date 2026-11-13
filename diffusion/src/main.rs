@@ -353,6 +353,19 @@ fn train(options: &Options) {
     }
     println!("trained in {:.1}s", started.elapsed().as_secs_f64());
 
+    // Record the step actually reached, so a snapshot of this directory names
+    // the weights it contains instead of the last periodic checkpoint.
+    let progress = serde_json::json!({
+        "step": options.steps,
+        "config": config,
+        "ema_decay": options.ema_decay,
+    });
+    std::fs::write(
+        &progress_path,
+        serde_json::to_string_pretty(&progress).expect("serialise"),
+    )
+    .expect("write progress");
+
     // Final: EMA weights for sampling, live weights kept for reference.
     diffusion
         .model

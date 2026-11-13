@@ -134,6 +134,22 @@ def gradient_energy(images: np.ndarray) -> float:
     return float(horizontal + vertical)
 
 
+def colour_distance(a: np.ndarray, b: np.ndarray, bins: int = 32) -> float:
+    """Mean total-variation distance between per-channel colour histograms.
+
+    0 means identical palettes, 1 means disjoint. Frechet at 8x8 can be fooled by
+    the right average colour; this catches a palette that only looks close.
+    """
+    total = 0.0
+    for channel in range(a.shape[1]):
+        ha, _ = np.histogram(a[:, channel].ravel(), bins=bins, range=(-1.0, 1.0))
+        hb, _ = np.histogram(b[:, channel].ravel(), bins=bins, range=(-1.0, 1.0))
+        ha = ha / max(ha.sum(), 1)
+        hb = hb / max(hb.sum(), 1)
+        total += 0.5 * np.abs(ha - hb).sum()
+    return float(total / a.shape[1])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--samples", type=Path, required=True)
@@ -162,6 +178,7 @@ def main() -> None:
     result["grad_energy"] = gradient_energy(samples)
     result["held_grad_energy"] = gradient_energy(held)
     result["grad_ratio"] = result["grad_energy"] / result["held_grad_energy"]
+    result["colour_distance"] = colour_distance(samples, held)
     print(json.dumps(result, indent=2))
     if args.json:
         args.json.write_text(json.dumps(result, indent=2))

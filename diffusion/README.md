@@ -215,6 +215,119 @@ The binding limit is still steps. The corrected loader runs at 0.151 s/step, so
 the same hour holds ~24,000 steps rather than 7,000; that is the experiment this
 result argues for next.
 
+## Pixel-FID: the floor, the target, and where the model stops
+
+The target was pixel-FID 4.0, same estimator as everywhere else in this file.
+Before training, the estimator's floor was measured on real images, because a
+target below the floor would be meaningless.
+
+### The floor, measured first
+
+`scripts/ddpm_floor.py` compares real images with real images:
+
+| Comparison | pixel-FID |
+| --- | ---: |
+| all 3,303 training images vs the 367 held out | **1.789** |
+| 367-image training subsets vs the 367 held out (5 draws) | **2.957 +- 0.234** |
+| colour-histogram distance, train vs held out | 0.117 |
+
+A model trained on the training split is scored against the held-out split, and
+its samples are finite in number, so **2.96 is the operative floor** and 4.0 sits
+1.04 above it. The target is legitimate: it asks for about two thirds of the
+remaining gap, not for something below what real images score.
+
+### Frozen estimator
+
+DDIM 50, EMA weights, 8x8x3 pooling, 512 samples per draw, three independent
+draws, the same 367 held-out images. 512 samples in one pass exceed the 8 GB
+card at `dim 24`, so draws are generated in chunks of 128 and concatenated; the
+buffer layout and the 512-sample estimate are identical.
+
+### Results
+
+| Stage | Params | Steps | Wall clock | pixel-FID | nearest L1 | gradient ratio | colour dist. |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64x64 `dim 16` | 2.44 M | 7,000 | 1,063 s | 6.541 +- 0.171 | 0.307 | 0.984 | 0.219 |
+| 64x64 `dim 16` | 2.44 M | 24,000 | 3,256 s | **5.956 +- 0.317** | 0.302 | 0.947 | 0.201 |
+| 64x64 `dim 16` | 2.44 M | 48,000 | 3,416 s | 7.341 +- 0.298 | 0.297 | 0.979 | 0.224 |
+| 64x64 `dim 24` | 5.28 M | 13,000 | ~2,500 s | **5.131 +- 0.233** | 0.313 | 0.939 | 0.175 |
+
+Floors: nearest L1 0.329, gradient ratio 1.0, colour distance 0.117.
+
+![Pixel-FID against steps](../docs/ddpmfid-curve.webp)
+
+![One grid per stage](../docs/ddpmfid-stages.webp)
+
+### The step ladder is not monotone
+
+7,000 -> 24,000 steps improves the distance by 0.59. 24,000 -> 48,000 makes it
+**worse by 1.38**, while the training loss keeps falling (0.106 -> ~0.10 ->
+0.093). That is the divergence the plan asked to catch: lower denoising loss and
+a sample distribution further from held-out.
+
+The 48k samples are further from the held-out set (7.34 vs 5.96) *and* further
+from a matched subset of the training set (6.51 vs 4.81), so this is not
+memorisation of the training images. Their gradient ratio also rises again
+(0.947 -> 0.979) and their colour distance grows (0.201 -> 0.224): the output
+gets harsher and its palette drifts away from the data.
+
+One confound must be stated: the 48k stage was resumed from 24k, and Burn's
+`AdamW` exposes no moments, so the second block restarts the optimizer and
+re-initialises the EMA shadow (`GLM-030`). Part of the 24k -> 48k regression may
+be that boundary rather than the extra steps. A clean test needs one
+uninterrupted 48,000-step run, about 1.9 h, which the shared GPU did not allow.
+
+### Capacity helps, but does not reach 4.0
+
+`dim 24` has 5.28 M parameters and costs only ~1.4x per step, not the 2.2x the
+parameter count suggests: at 64x64 the kernels are too small to be
+compute-bound. In the same wall clock it therefore gets 13,000 steps.
+It scores **5.131**, the best measured point: 0.83 below `dim 16` at 24k and 1.41
+below `dim 16` at 7k, with the closest palette of any stage (0.175 against the
+0.117 floor).
+
+The extension of that run to 26,000 steps was abandoned: the machine's GPU was
+shared with a game, the step rate fell from 0.19 to 0.4-0.7 s/step, and another
+13,000 steps would have taken about 1.8 h while no longer being an equal
+wall-clock comparison. It was stopped at its 13,000-step checkpoint.
+
+### Weight and gradient heatmaps
+
+![Weights, 48k](../docs/ddpmfid-weights.webp)
+
+![Gradients, 48k](../docs/ddpmfid-gradients.webp)
+
+![Per-tensor scale, 48k](../docs/ddpmfid-scales.webp)
+
+At 48,000 steps: 245 tensors, **no zero gradients**, the smallest `4.2e-8`.
+Weight sd `1.2e-2` to `2.6e-1` (median `5.5e-2`); gradient sd `4.2e-8` to
+`1.2e-2` (median `1.2e-4`). The memory keys/values remain the quietest at
+`3.9e-7`. Weight and gradient size correlate at `r = +0.56`, up from `+0.39` at
+7,000 steps.
+
+### Verdict
+
+**Pixel-FID did not reach 4.0. The best measured point is 5.131**, 2.17 above the
+matched floor of 2.96 and still 1.13 above the target.
+
+What blocks it, in order of evidence:
+
+- **Capacity is not the wall, but it is a real lever.** `dim 24` at 13k beats
+  `dim 16` at 24k at equal wall clock. It has not been run long enough to know
+  where it stops improving; 24k steps at `dim 24` would take about 2.5 h.
+- **Steps alone stop helping.** The `dim 16` curve bottoms at 24k and rises by
+  48k, while the loss keeps falling. More steps at the same size is not the
+  answer.
+- **The remaining gap is in second-order statistics.** The palette distance sits
+  at 0.175-0.224 against a 0.117 floor, and the gradient ratio shows the texture
+  is close but not right. That is what a 64x64 model with 3,303 training images
+  can be expected to leave on the table.
+
+The samples are painterly flower masses: recognisable sunflower heads, poppy
+fields, rose clusters, skies. They are not photographs, and 64x64 does not
+resolve individual petals. A serious attempt at 4.0 needs `dim 24` for 24k+
+steps, uninterrupted, or a move to 128x128 with a matched budget.
+
 ## Usage
 
 ```sh
@@ -241,6 +354,15 @@ cargo run -p diffusion --release -- sample --backend wgpu --ckpt /tmp/run \
     --samples 128 --sampling-steps 50 --raw-out /tmp/run/ddim50.raw
 python3 scripts/ddpm_fidelity.py --samples /tmp/run/ddim50.raw \
     --held /tmp/flowers/held64.bin --train /tmp/flowers/train64.bin --size 64
+```
+
+The estimator's floor, and a curve across stages:
+
+```sh
+python3 scripts/ddpm_floor.py --train /tmp/flowers/train64.bin \
+    --held /tmp/flowers/held64.bin --size 64
+python3 scripts/plot_ddpm_curve.py --stage stage-24000/summary.json \
+    --stage stage-48000/summary.json --floor floor.json --out curve.png
 ```
 
 `--resume` restarts from the newest checkpoint. It restores the weights and the
@@ -271,5 +393,11 @@ resumed run continues with a fresh optimizer rather than replaying bit for bit.
   minutes before that was added.
 - **The Frechet distance needs more samples than dimensions.** At 128 samples and
   192 dims the covariance is rank-deficient and the estimate moves by more than a
-  unit between draws; `scripts/ddpm_fidelity.py` now refuses that combination and
-  every number in this README uses 256 samples.
+  unit between draws; `scripts/ddpm_fidelity.py` refuses that combination. The
+  loader-fix section uses 256 samples; the pixel-FID study uses 512.
+- **"FID" here is pixel-space.** 8x8 average pooling, 192 dimensions, Frechet on
+  the Gaussian fit. Inception FID from papers is a different estimator and the
+  numbers are not comparable.
+- **512-sample draws are generated in 128-sample chunks.** At `dim 24` a single
+  512-image pass exceeds the 8 GB card; the chunks concatenate to the identical
+  buffer layout, and the 512-sample estimate is the same.
