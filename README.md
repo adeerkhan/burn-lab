@@ -258,6 +258,18 @@ Burn's dashboard only renders when stdout is a terminal, so
 
 </details>
 
+## A second workload: diffusion
+
+`diffusion/` ports `lucidrains/denoising-diffusion-pytorch` — the UNet, the
+schedules, DDPM and DDIM sampling, and the EMA. It is the counterpart to `glm53`:
+where that exercises attention and MoE on text, this exercises convolution,
+residual blocks and attention over a spatial grid.
+
+Its schedules and `q_sample` are checked against values extracted from the
+reference source, and it trains a synthetic-shape dataset end to end: 900 steps
+move the sample-to-template distance from 0.861 to 0.277. See
+[`diffusion/README.md`](diffusion/README.md).
+
 ## Repository layout
 
 ```
@@ -266,6 +278,7 @@ burn-lab/
 ├── scripts/              # tmux helper for the TUI dashboard
 ├── bench/                # forward-pass benchmark against the PyTorch reference
 ├── docs/                 # figures + the script that renders them
+├── diffusion/            # DDPM/DDIM port of denoising-diffusion-pytorch
 └── glm53/                # the GLM-5.3-Flash port
     ├── python/           # evaluator harness (AST allowlist + test runner)
     ├── src/

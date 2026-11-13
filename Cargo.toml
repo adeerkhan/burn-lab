@@ -1,5 +1,5 @@
 [workspace]
-members = ["glm53"]
+members = ["glm53", "diffusion"]
 resolver = "3"
 
 [package]
