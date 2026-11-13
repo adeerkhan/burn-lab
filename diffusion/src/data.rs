@@ -195,3 +195,90 @@ pub fn nearest_template_distance(samples: Tensor<4>, size: usize) -> f32 {
     }
     total / count as f32
 }
+
+/// A flat file of `count` RGB images of `size x size`, packed as u8.
+pub struct RawImages {
+    data: Vec<u8>,
+    size: usize,
+    count: usize,
+}
+
+impl RawImages {
+    pub fn load(path: &str, size: usize) -> Self {
+        let data = std::fs::read(path).unwrap_or_else(|error| panic!("read {path}: {error}"));
+        let stride = 3 * size * size;
+        assert!(
+            data.len().is_multiple_of(stride),
+            "{path} is not a whole number of {size}x{size} RGB images"
+        );
+        Self {
+            count: data.len() / stride,
+            data,
+            size,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// A batch of random images in `[-1, 1]`.
+    pub fn batch(&self, batch: usize, seed: u64, device: &Device) -> Tensor<4> {
+        let mut rng = Rng::new(seed);
+        let stride = 3 * self.size * self.size;
+        let mut pixels = Vec::with_capacity(batch * stride);
+        for _ in 0..batch {
+            let index = rng.below(self.count);
+            let offset = index * stride;
+            pixels.extend(
+                self.data[offset..offset + stride]
+                    .iter()
+                    .map(|byte| *byte as f32 / 127.5 - 1.0),
+            );
+        }
+        Tensor::<4>::from_data(
+            TensorData::new(pixels, [batch, 3, self.size, self.size]),
+            device,
+        )
+    }
+
+    /// Mean L1 distance from each sample to the closest of `subset` training
+    /// images. A rough quality proxy when there are no templates.
+    pub fn nearest_training_distance(&self, samples: Tensor<4>, subset: usize, seed: u64) -> f32 {
+        let [batch, _, _, _] = samples.dims();
+        let stride = 3 * self.size * self.size;
+        let flat = samples
+            .into_data()
+            .convert::<f32>()
+            .try_to_vec::<f32>()
+            .unwrap();
+        let mut rng = Rng::new(seed);
+        let references: Vec<&[u8]> = (0..subset.min(self.count))
+            .map(|_| {
+                let index = rng.below(self.count);
+                &self.data[index * stride..(index + 1) * stride]
+            })
+            .collect();
+
+        let mut total = 0.0f32;
+        for index in 0..batch {
+            let sample = &flat[index * stride..(index + 1) * stride];
+            let mut best = f32::MAX;
+            for reference in &references {
+                let distance: f32 = sample
+                    .iter()
+                    .zip(reference.iter())
+                    .map(|(a, b)| (a - (*b as f32 / 127.5 - 1.0)).abs())
+                    .sum::<f32>()
+                    / stride as f32;
+                best = best.min(distance);
+            }
+            total += best;
+        }
+        total / batch as f32
+    }
+}

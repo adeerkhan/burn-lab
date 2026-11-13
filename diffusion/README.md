@@ -76,6 +76,62 @@ cargo run -p diffusion --release -- train --steps 900 --batch 16 \
 cargo run -p diffusion --release -- sample --ckpt artifacts/ddpm --sampling-steps 200
 ```
 
+## Flowers, and what the weights and gradients look like
+
+The synthetic shapes are a sanity check. For a real distribution, the TensorFlow
+`flower_photos` set (3,670 images, five classes) was centre-cropped and resized to
+32×32, then trained for 4,000 steps at `dim` 16 on `wgpu`.
+
+![Flowers: real, DDIM, DDPM](../docs/ddpm-flowers.webp)
+
+| Sampler | Steps | Time (16 images) | Mean L1 to the nearest training image |
+| --- | ---: | ---: | ---: |
+| DDIM | 20 | 1.35 s | 0.340 |
+| DDPM | 200 | 4.76 s | 0.340 |
+
+**DDIM and DDPM share one set of weights.** They are two ways to run the same
+model, so there is no "DDIM model" and "DDPM model" to compare; the difference is
+the sampling trajectory. At 32×32 and 4,000 steps the samples are colour and
+shape blobs rather than recognisable flowers — that is the honest state of this
+run, not a rendering artefact.
+
+### Weight and gradient heatmaps
+
+`--dump` writes a per-tensor summary — shape, mean, sd, min, max, zero fraction,
+and a 32×32 block-mean grid — for the weights and for the gradients of the last
+training step. `scripts/plot_ddpm_inspection.py` renders them.
+
+![Weight heatmaps](../docs/ddpm-weights.webp)
+
+![Gradient heatmaps](../docs/ddpm-gradients.webp)
+
+![Per-layer scale](../docs/ddpm-layer-scales.webp)
+
+What the dump says about this model:
+
+- **245 parameter tensors, and every one receives a non-zero gradient** on a
+  random batch. Nothing is disconnected.
+- Weight sd ranges from `1.9e-3` to `2.0e-1` (median `3.6e-2`); gradient sd from
+  `2.7e-7` to `3.2e-2` (median `1.3e-4`), about five orders of magnitude between
+  the quietest and loudest tensor.
+- Grouped by shape, the picture is not "deep layers are quiet":
+
+  | Group | Tensors | Weight sd | Gradient sd |
+  | --- | ---: | ---: | ---: |
+  | 1×1 convolutions | 31 | `7.8e-2` | `1.1e-3` |
+  | 3×3 convolutions | 43 | `3.3e-2` | `8.1e-4` |
+  | 7×7 stem | 1 | `4.8e-2` | `2.3e-3` |
+  | linear (time MLP) | 21 | `7.7e-2` | `2.0e-4` |
+  | norms and biases | 140 | `3.6e-2` | `1.5e-3` |
+  | memory keys/values | 9 | `1.2e-2` | **`5.4e-7`** |
+
+- The 1×1 and linear layers carry the largest weights, but the linear layers get
+  roughly ten times smaller gradients than the 1×1 convolutions. The memory
+  keys/values are the quietest by far: real gradients, three orders of magnitude
+  below everything else.
+- Weight magnitude and gradient magnitude are only weakly related: `r = +0.33`
+  between their logs. A large weight does not predict a large update.
+
 ## Usage
 
 ```sh

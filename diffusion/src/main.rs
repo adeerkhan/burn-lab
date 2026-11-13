@@ -17,6 +17,8 @@ struct CheckpointConfig {
     timesteps: usize,
     sampling_timesteps: usize,
     dim_mults: Vec<usize>,
+    #[serde(default)]
+    data: String,
 }
 
 #[derive(Clone)]
@@ -30,6 +32,8 @@ struct Options {
     sampling_timesteps: usize,
     out: String,
     checkpoint: String,
+    data: String,
+    dump: String,
     samples: usize,
 }
 
@@ -45,6 +49,8 @@ impl Default for Options {
             sampling_timesteps: 0, // 0 = use the train default, or the checkpoint's at sample time
             out: "artifacts/ddpm".to_string(),
             checkpoint: String::new(),
+            data: String::new(),
+            dump: String::new(),
             samples: 16,
         }
     }
@@ -76,6 +82,8 @@ impl Options {
                 }
                 "--out" => options.out = value(),
                 "--ckpt" => options.checkpoint = value(),
+                "--data" => options.data = value(),
+                "--dump" => options.dump = value(),
                 "--samples" => options.samples = value().parse().expect("samples"),
                 other => panic!("unknown flag `{other}`"),
             }
@@ -101,6 +109,7 @@ fn checkpoint_config(options: &Options) -> CheckpointConfig {
         timesteps: options.timesteps,
         sampling_timesteps: options.sampling_timesteps,
         dim_mults: vec![1, 2, 4, 8],
+        data: options.data.clone(),
     }
 }
 
@@ -192,10 +201,26 @@ fn train(options: &Options) {
     let mut ema = Ema::new(&diffusion.model, 0.995);
     let mut optimizer = AdamWConfig::new().init();
     let mut rng = diffusion::data::Rng::new(11);
+    let raw = if options.data.is_empty() {
+        None
+    } else {
+        Some(diffusion::data::RawImages::load(
+            &options.data,
+            options.image_size,
+        ))
+    };
+    if let Some(images) = &raw {
+        println!("dataset {} ({} images)", options.data, images.len());
+    }
 
     let started = std::time::Instant::now();
     for step in 1..=options.steps {
-        let x0 = diffusion::data::batch(options.batch, options.image_size, rng.next_u64(), &device);
+        let x0 = match &raw {
+            Some(images) => images.batch(options.batch, rng.next_u64(), &device),
+            None => {
+                diffusion::data::batch(options.batch, options.image_size, rng.next_u64(), &device)
+            }
+        };
         let times: Vec<i64> = (0..options.batch)
             .map(|_| rng.below(options.timesteps) as i64)
             .collect();
@@ -208,6 +233,26 @@ fn train(options: &Options) {
         let loss = diffusion.p_losses(x0, &times, noise, &device);
         let value = loss.clone().into_scalar::<f32>();
         let grads = GradientsParams::from_grads(loss.backward(), &diffusion.model);
+
+        // Capture weights and gradients on the last step, before the update.
+        if !options.dump.is_empty() && step == options.steps {
+            let dump = diffusion::inspect::dump(&diffusion.model, Some(&grads));
+            if let Some(parent) = std::path::Path::new(&options.dump).parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            std::fs::write(
+                &options.dump,
+                serde_json::to_string(&dump).expect("serialise the dump"),
+            )
+            .expect("write the dump");
+            println!(
+                "wrote {} ({} weight layers, {} gradient layers)",
+                options.dump,
+                dump.weights.len(),
+                dump.gradients.len()
+            );
+        }
+
         diffusion.model = optimizer.step(2e-4, diffusion.model, grads);
         if step > options.steps / 10 {
             ema.update(&diffusion.model);
@@ -224,19 +269,28 @@ fn train(options: &Options) {
     let mut sampled = diffusion.clone();
     sampled.model = ema.model.valid();
     let images = sampled.sample(options.samples, &device);
-    let distance = diffusion::data::nearest_template_distance(images.clone(), options.image_size);
+    let distance = match &raw {
+        Some(source) => source.nearest_training_distance(images.clone(), 256, 5),
+        None => diffusion::data::nearest_template_distance(images.clone(), options.image_size),
+    };
     println!(
-        "sampled {} images in {:.2}s ({} DDIM steps); mean L1 distance to the closest template {:.3}",
+        "sampled {} images in {:.2}s ({} steps); mean L1 distance to the {} {:.3}",
         options.samples,
         started.elapsed().as_secs_f64(),
         options.sampling_timesteps,
+        if raw.is_some() {
+            "nearest training image"
+        } else {
+            "closest template"
+        },
         distance
     );
     save_samples(images, &format!("{}/samples.png", options.out));
-    save_samples(
-        diffusion::data::batch(options.samples, options.image_size, 7, &device),
-        &format!("{}/real.png", options.out),
-    );
+    let real = match &raw {
+        Some(source) => source.batch(options.samples, 7, &device),
+        None => diffusion::data::batch(options.samples, options.image_size, 7, &device),
+    };
+    save_samples(real, &format!("{}/real.png", options.out));
 
     std::fs::create_dir_all(&options.out).ok();
     diffusion
@@ -288,11 +342,27 @@ fn sample(options: &Options) {
 
     let started = std::time::Instant::now();
     let images = diffusion.sample(options.samples, &device);
-    let distance = diffusion::data::nearest_template_distance(images.clone(), config.image_size);
+    let raw = if config.data.is_empty() {
+        None
+    } else {
+        Some(diffusion::data::RawImages::load(
+            &config.data,
+            config.image_size,
+        ))
+    };
+    let distance = match &raw {
+        Some(source) => source.nearest_training_distance(images.clone(), 256, 5),
+        None => diffusion::data::nearest_template_distance(images.clone(), config.image_size),
+    };
     println!(
-        "sampled {} images in {:.2}s with {sampling} steps; mean L1 to the closest template {distance:.3}",
+        "sampled {} images in {:.2}s with {sampling} steps; mean L1 to the {} {distance:.3}",
         options.samples,
-        started.elapsed().as_secs_f64()
+        started.elapsed().as_secs_f64(),
+        if raw.is_some() {
+            "nearest training image"
+        } else {
+            "closest template"
+        }
     );
     let kind = if sampling < config.timesteps {
         "ddim"

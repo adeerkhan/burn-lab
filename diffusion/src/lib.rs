@@ -3,5 +3,6 @@
 pub mod data;
 pub mod diffusion;
 pub mod ema;
+pub mod inspect;
 pub mod test_support;
 pub mod unet;
