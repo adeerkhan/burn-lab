@@ -76,154 +76,131 @@ cargo run -p diffusion --release -- train --steps 900 --batch 16 \
 cargo run -p diffusion --release -- sample --ckpt artifacts/ddpm --sampling-steps 200
 ```
 
-## Flowers at 64x64: one hour, measured
+## Flowers at 64x64: the loader fix, controlled
 
-The question was how good a flower DDPM one hour of wall clock can buy. The
-configuration was chosen from a timing projection **before** any sample was
-looked at, then run to the fixed step count without tuning.
+Two runs at exactly the same configuration, differing in one thing: the image
+loader. The first copied interleaved RGB bytes into a `[3, H, W]` tensor, so the
+network trained on a channel-interleaved permutation of every image while the
+sample writer undid the permutation on display (`GLM-032`). The second uses the
+corrected loader. Everything else is identical: 64x64, `dim 16`,
+`dim_mults (1,2,4,8)`, batch 16, sigmoid schedule, 200 timesteps, v-prediction,
+AdamW 2e-4, EMA 0.999, seed 11, 7,000 steps, 2,439,043 parameters.
 
-### The projection
+### Data and held-out split
 
-Three candidates, 300 steps each on the RTX 5060 with `wgpu`, batch 16, steady
-state after shader compilation:
-
-| Configuration | s/step | Steps in 45 min | Gate | Verdict |
-| --- | ---: | ---: | ---: | --- |
-| 64x64, `dim 16` | 0.374 | ~7,200 | 4,000 | **chosen** |
-| 32x32, `dim 32` | 0.325 | ~8,300 | 6,000 | fits, but smaller images |
-| 32x32, `dim 24` | 0.313 | ~8,600 | 8,000 | fits, but smaller images |
-
-The first row wins: **64x64, `dim 16`, 7,000 steps**, 2,439,043 parameters,
-batch 16, sigmoid schedule, 200 timesteps, v-prediction, AdamW at 2e-4.
-
-### Data
-
-TensorFlow `flower_photos`, 3,670 images in five classes. `scripts/prepare_flowers.py`
-centre-crops and resizes to 64x64, and splits **3,303 train / 367 held out** by
-file with seed 1234. The held-out tenth is never trained on; it is used only for
-the metrics below.
+TensorFlow `flower_photos`, 3,670 images in five classes, centre-cropped to
+64x64 and split **3,303 train / 367 held out** by file (seed 1234). The held-out
+tenth is never trained on. The loader fix is verified before training by
+rendering one batch: it shows flowers, and `tests/raw_images.rs` pins the plane
+order with a 2x2 red/green/blue/white image.
 
 ### Training
 
-7,000 steps in **2,384.7 s (39.8 min)**, 0.32-0.38 s/step, peak GPU memory
-5.4 GB. The loss fell from 0.776 to 0.154 (last reported step). EMA decay 0.999
-is updated every step and the final grids are sampled from the EMA weights.
+| Run | Loader | Steps | Time | s/step | Loss, last step |
+| --- | --- | ---: | ---: | ---: | ---: |
+| A (recorded) | interleaved | 7,000 | 2,384.7 s | 0.34 | 0.154 |
+| B (fixed) | planar | 7,000 | **1,063.0 s** | **0.15** | **0.106** |
 
-![Loss curve](../docs/ddpm64-loss.webp)
+Reducing the pixels to their correct positions made the data easier to fit: the
+loss reaches 0.106 where A ended at 0.154. Run B took 17.7 minutes; run A's
+0.34 s/step was measured while several builds and metric jobs shared the
+machine. On an idle machine the same configuration measures 0.151 s/step, so an
+hour now holds about **24,000 steps**, not 7,000.
 
-A checkpoint (`model`, `model-live`, `config.json`, `progress.json`) and a
-16-image DDIM-20 grid are written every 1,000 steps; `--resume` continues from
-the recorded step. Batches are seeded per step, so a resumed run replays the
-same data.
+Peak GPU memory during training: 3.4 GB (nvidia-smi, batch 16). Checkpoints
+(live weights, EMA weights, config, progress) and a 16-image DDIM-20 grid every
+1,000 steps; `--resume` continues from the recorded step.
 
-### Samplers
+![Loss curve](../docs/ddpm64fix-loss.webp)
 
-DDIM and DDPM are two trajectories through **one** set of weights, so there is
-one model and four ways to sample it. 128 images per trajectory, EMA weights:
+### Samplers and metrics
 
-| Sampler | Steps | Images | Time | nearest-training L1 | Frechet (8x8x3) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| DDIM | 20 | 128 | 34.3 s | 0.292 | 6.11 |
-| DDIM | 50 | 128 | 24.0 s | 0.304 | 4.91 |
-| DDPM | 200 | 128 | 85.7 s | 0.293 | 4.76 |
-| DDPM | 200 (repeat draw) | 128 | 88.0 s | 0.295 | 6.30 |
+256 samples per trajectory, EMA weights, held-out references. The Fréchet
+distance is the same estimator as before: 8x8x3 pooled pixels, 192 dimensions.
 
-The DDIM-20 line is slower than DDIM-50 because the first process in a session
-pays for shader compilation; one 16-image DDIM-20 grid takes 1.2 s, and a
-16-image full DDPM chain takes 17.9 s.
+| Model | Sampler | Steps | Time, 256 | Fréchet | nearest L1 | gradient ratio |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| baseline, 32x32, 4k | DDIM | 50 | 8.3 s | 9.224 | 0.319 | 1.353 |
+| A, permuted loader | DDIM | 50 | 16.8 s | 10.280 | 0.304 | 1.308 |
+| **B, fixed loader** | DDIM | 20 | 15.3 s | 9.830 | 0.285 | 0.868 |
+| **B, fixed loader** | DDIM | 50 | 19.4 s | **7.008** | 0.312 | **0.983** |
+| **B, fixed loader** | DDPM | 200 | 80.9 s | 7.296 | 0.289 | 0.894 |
+| **B, fixed loader** | DDIM | 50, repeat | 19.8 s | 7.010 | 0.309 | 0.980 |
 
-**A 1,000-step DDPM chain does not exist for this model.** It was trained with
-200 timesteps, and DDPM must run the chain it was trained on; asking for 1,000
-used to run the 200-step chain while printing "1,000 steps", which is fixed
-(`GLM-033`). The repeat row is that same trajectory drawn again with another
-seed: identical weights, identical chain, FID 4.76 against 6.30. **The Frechet
-number moves by 1.5 between draws at 128 samples**, so differences below that
-are sampling noise, not quality. That is why the model-versus-baseline gap below
-is reported as a tie rather than a win.
+Held-out floors for reference: nearest L1 **0.329** at 64x64 (0.308 at 32x32);
+gradient energy **0.231**, so a perfect gradient ratio is 1.0.
 
-![Samplers: real, DDIM 20, DDIM 50, DDPM 200](../docs/ddpm64-comparison.webp)
+![Samplers: real, DDIM 20, DDIM 50, DDPM 200](../docs/ddpm64fix-comparison.webp)
 
-### Held-out metrics, against the 4k baseline
+### Did the fix improve the model?
 
-| Model | Sampler | Frechet (lower) | nearest L1 (lower) | Held-out floor |
-| --- | --- | ---: | ---: | ---: |
-| 32x32 `dim 16`, 4,000 steps (baseline) | DDIM 50 | 4.844 | 0.318 | 0.311 |
-| 64x64 `dim 16`, 7,000 steps | DDIM 20 | 6.113 | 0.292 | 0.335 |
-| 64x64 `dim 16`, 7,000 steps | DDIM 50 | 4.905 | 0.304 | 0.335 |
-| 64x64 `dim 16`, 7,000 steps | DDPM 200 | **4.764** | 0.293 | 0.335 |
+**Yes, clearly.** Fréchet 10.28 → 7.01 for the same sampler, steps and weights
+budget, a 32% drop and 24% below the 32x32 baseline. The gradient ratio moved
+from 1.31 (31% more high-frequency energy than real photos — the grain and
+colour fringing of the old output) to 0.98, essentially matching the held-out
+images. The repeat draw differs by 0.002, so the gap is not noise.
 
-![Metrics](../docs/ddpm64-metrics.webp)
+**And the samples finally read as flowers.** They are soft, close-up masses —
+petal clusters, yellow centres, green foliage, a plausible sky — rather than the
+smooth colour fields of run A. They are not photographic: there are no crisp
+petal edges, and at 64x64 individual flowers are not resolved.
 
-How to read this, including the parts that are not flattering:
+### A measurement correction
 
-- **The Frechet distance is computed at 8x8x3 = 192 dimensions**, not the full
-  12,288. The full covariance needs far more than 128 samples, so both sides are
-  average-pooled first. It therefore scores coarse colour and layout, not petal
-  detail.
-- **The new model is not better than the baseline.** DDPM 200 ties it (4.76 vs
-  4.84) and DDIM 20 is clearly worse (6.11). Four times the pixels and 1.75x the
-  steps bought no measurable distribution win.
-- **Nearest-training L1 is below the held-out floor** (0.29 vs 0.335): the
-  samples sit *closer* to training images than real held-out images do, which is
-  the signature of blurry, mean-looking output rather than of memorisation. The
-  metric cannot separate "realistic" from "smooth"; that is why the floor of a
-  real image is reported beside it.
-- The baseline's held-out images were in its training set, so its Frechet is
-  flattered by leakage. It is still not beaten, which makes the comparison
-  conservative in the baseline's favour.
+The earlier 128-sample numbers (DDIM 20 6.11, DDIM 50 4.91, DDPM 200 4.76, and
+the repeat at 6.30) are **not comparable** with the table above, and the "±1.5
+noise" read from them was wrong. With 128 samples and 192 pooled dimensions the
+sample covariance has rank 127, the Fréchet matrix square root loses the null
+space and the estimate swings by more than a unit between draws. The differences
+in that table were dominated by the estimator, not the models.
+
+At 256 samples the covariance is full rank: two DDIM-50 draws whose pixels
+differ by a mean absolute 0.47 score 7.008 and 7.010. `scripts/ddpm_fidelity.py`
+now refuses to compute the distance when samples <= dimensions. All numbers in
+the table are 256-sample recomputations, including the old model and the
+baseline, with the old raw dumps un-permuted to true image space first. That is
+why the recorded 4.76 became 10.280 for run A: same model, correct space,
+well-conditioned estimator.
 
 ### Weight and gradient heatmaps
 
-`--dump` writes, for every tensor, the shape, mean, sd, min, max, zero fraction
-and a 32x32 block mean, for the weights and for the gradients of the last step.
-`scripts/plot_ddpm_inspection.py` renders them.
+`--dump` writes per-tensor shape, mean, sd, min, max, zero fraction and a 32x32
+block mean, for weights and for the gradients of the last step.
 
-![Weights](../docs/ddpm64-weights.webp)
+![Weights](../docs/ddpm64fix-weights.webp)
 
-![Gradients](../docs/ddpm64-gradients.webp)
+![Gradients](../docs/ddpm64fix-gradients.webp)
 
-![Per-tensor scale](../docs/ddpm64-layer-scales.webp)
+![Per-tensor scale](../docs/ddpm64fix-layer-scales.webp)
 
-| Group | Tensors | Weight sd | Gradient sd |
-| --- | ---: | ---: | ---: |
-| 1x1 convolutions | 31 | `8.0e-2` | `6.3e-4` |
-| 3x3 convolutions | 43 | `3.4e-2` | `4.6e-4` |
-| 7x7 stem | 1 | `4.9e-2` | `2.6e-3` |
-| linear (time MLP) | 21 | `7.8e-2` | `1.4e-4` |
-| norms and biases | 140 | `3.7e-2` | `9.3e-4` |
-| memory keys/values | 9 | `1.2e-2` | **`1.7e-7`** |
+| Group | Tensors | Weight sd | Gradient sd | A -> B |
+| --- | ---: | ---: | ---: | --- |
+| 1x1 convolutions | 31 | `8.0e-2` | `1.0e-3` | grad 6.3e-4 -> 1.0e-3 |
+| 3x3 convolutions | 43 | `3.4e-2` | `4.7e-4` | grad 4.6e-4 -> 4.7e-4 |
+| 7x7 stem | 1 | `5.0e-2` | `1.2e-3` | grad 2.6e-3 -> 1.2e-3 |
+| linear (time MLP) | 21 | `7.8e-2` | `1.7e-4` | grad 1.4e-4 -> 1.7e-4 |
+| norms and biases | 140 | `3.8e-2` | `1.3e-3` | grad 9.3e-4 -> 1.3e-3 |
+| memory keys/values | 9 | `1.2e-2` | **`2.6e-7`** | grad 1.7e-7 -> 2.6e-7 |
 
 - **245 tensors, every one with a non-zero gradient**; the smallest is
-  `7.1e-8`, so nothing is disconnected and nothing has vanished outright.
-- Weight sd spans `3.8e-3` to `2.2e-1` (median `4.0e-2`), gradient sd `7.1e-8`
-  to `2.1e-2` (median `9.5e-5`).
-- The memory keys/values are the quietest by three to four orders of magnitude.
-  They are read by the attention blocks but barely updated on this data and
-  budget.
-- Weight size does not predict update size: `r = +0.37` between their logs.
+  `1.3e-7`, so nothing is disconnected or vanishing outright.
+- Weight sd spans `2.7e-3` to `2.3e-1` (median `4.1e-2`); gradient sd `1.3e-7` to
+  `2.4e-2` (median `1.7e-4`).
+- The memory keys/values remain the quietest by three to four orders of
+  magnitude; the correct data did not change that.
+- Weight size still does not predict update size: `r = +0.39` between their logs.
 
 ### Verdict
 
-**The samples do not look like flowers.** They are smooth colour fields with
-plausible flower-distribution colours -- greens, pinks, yellows -- and no petal,
-centre or stem structure. At 64x64 and 7,000 steps the model has learned the
-colour statistics of the dataset and nothing about its shapes.
+**The fix worked and the samples now look like flowers** — soft, close-up flower
+masses with petals, centres and foliage, not the colour fields of the previous
+run. Fréchet fell from 10.28 to 7.01 and the texture energy matches real images
+at 0.98 against 1.31. They are not photographic flowers, and 64x64 does not
+resolve individual petals.
 
-What would be needed is not a bigger grid but **more steps**: the reference
-class of quality at 64x64 is tens of thousands of steps on this architecture
-(roughly 3-6 hours on this card, or a 10x smaller `dim` at 32x32). The one-hour
-budget buys the colour distribution, not the objects.
-
-One correctness defect was found *after* the run and is documented as
-`GLM-032` in the local bug log: the loader copied interleaved RGB bytes into a
-planar `[3, H, W]` tensor, so the network was trained on a channel-interleaved
-permutation of each image, and the sample writer undid the permutation on
-display. Both are fixed, with a unit test that pins the plane order. The
-reported metrics remain internally consistent -- samples and references were
-permuted identically -- but the model saw a harder problem than it should have,
-so **the quality above is a lower bound** for this configuration, and the first
-thing a rerun should do is repeat the same 7,000 steps with the corrected
-loader.
+The binding limit is still steps. The corrected loader runs at 0.151 s/step, so
+the same hour holds ~24,000 steps rather than 7,000; that is the experiment this
+result argues for next.
 
 ## Usage
 
@@ -275,5 +252,11 @@ resumed run continues with a fresh optimizer rather than replaying bit for bit.
   decay; the port keeps the part the training loop uses.
 - **Resume restores weights, not optimizer state.** Burn's `AdamW` exposes no
   moments, so `--resume` continues with a fresh optimizer; see `GLM-030`.
-- **wgpu can segfault at teardown.** About one process in ten dies after writing
-  its artefacts; the files are complete and the exit code is 139.
+- **wgpu can segfault, abort or hang at teardown.** It happens after every
+  artefact is written, so `sample` and `train` flush stdout and exit without
+  running the backend destructors (`GLM-034`). One sampling process hung for 20
+  minutes before that was added.
+- **The Frechet distance needs more samples than dimensions.** At 128 samples and
+  192 dims the covariance is rank-deficient and the estimate moves by more than a
+  unit between draws; `scripts/ddpm_fidelity.py` now refuses that combination and
+  every number in this README uses 256 samples.

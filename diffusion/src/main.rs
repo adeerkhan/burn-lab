@@ -142,6 +142,13 @@ fn unet_config(config: &CheckpointConfig) -> UnetConfig {
     }
 }
 
+/// Exit without unwinding the backend. All artefacts are already on disk.
+fn leave_after_writing() -> ! {
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+    std::process::exit(0);
+}
+
 fn save_samples(samples: Tensor<4>, path: &str) {
     let [batch, _, height, width] = samples.dims();
     let flat = samples
@@ -400,6 +407,9 @@ fn train(options: &Options) {
         "wrote {}/samples-ema.png and {}/real.png",
         options.out, options.out
     );
+    // wgpu teardown can segfault, abort or hang *after* every artefact is
+    // written (GLM-023/024/034). Leave without running the destructors.
+    leave_after_writing();
 }
 
 fn sample(options: &Options) {
@@ -498,6 +508,7 @@ fn sample(options: &Options) {
         .expect("write the shape");
         println!("wrote {} ({} samples)", options.raw_out, batch);
     }
+    leave_after_writing();
 }
 
 /// A short run that has to show the loss falling, then samples.

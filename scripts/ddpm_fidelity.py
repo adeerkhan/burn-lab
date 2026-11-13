@@ -25,27 +25,29 @@ from pathlib import Path
 import numpy as np
 
 
-def load_u8(path: Path, ceiling: int, legacy_dump: bool = False) -> np.ndarray:
-    """Load an interleaved RGB file as NCHW, or in the pre-fix permuted order.
-
-    `legacy_dump` reproduces the ordering of the 2026-11-13 64x64 run, whose
-    loader copied interleaved bytes straight into a `[3, H, W]` tensor and whose
-    sample writer undid that permutation on display. Its raw dumps are therefore
-    in tensor space, and must be compared against references read the same way.
-    """
+def load_u8(path: Path, ceiling: int) -> np.ndarray:
+    """Load an interleaved RGB file as NCHW true images."""
     flat = np.fromfile(path, dtype=np.uint8).astype(np.float32) / 127.5 - 1.0
     stride = 3 * ceiling * ceiling
     if flat.size % stride:
         raise SystemExit(f"{path} is not a whole number of {ceiling}x{ceiling} images")
-    if legacy_dump:
-        return flat.reshape(-1, 3, ceiling, ceiling)
     return flat.reshape(-1, ceiling, ceiling, 3).transpose(0, 3, 1, 2)
 
 
-def load_f32(path: Path) -> np.ndarray:
+def load_f32(path: Path, legacy: bool = False) -> np.ndarray:
+    """Load a raw NCHW dump.
+
+    `legacy` is for the 2026-11-13 runs, whose loader copied interleaved bytes
+    straight into a `[3, H, W]` tensor: the buffer *is* the interleaved stream,
+    so reading it as NHWC recovers the image that `save_samples` displayed.
+    """
     shape = json.loads(Path(f"{path}.json").read_text())["shape"]
     flat = np.fromfile(path, dtype="<f4")
-    return flat.reshape(shape).astype(np.float32)
+    array = flat.reshape(shape).astype(np.float32)
+    if legacy:
+        _, channels, height, width = shape
+        array = array.reshape(-1, height, width, channels).transpose(0, 3, 1, 2)
+    return array
 
 
 def pool(images: np.ndarray, grid: int = 8) -> np.ndarray:
@@ -58,7 +60,17 @@ def pool(images: np.ndarray, grid: int = 8) -> np.ndarray:
 
 
 def frechet(a: np.ndarray, b: np.ndarray) -> float:
-    """Frechet distance between two Gaussian fits: |mu_a-mu_b|^2 + Tr(Sa+Sb-2 sqrt(Sa Sb))."""
+    """Frechet distance between two Gaussian fits: |mu_a-mu_b|^2 + Tr(Sa+Sb-2 sqrt(Sa Sb)).
+
+    Needs more samples than dimensions. At 128 samples for 192 pooled values the
+    sample covariance has rank 127, the matrix square root loses the null space,
+    and the estimate swings by more than a unit between draws. 256 samples make
+    it full rank, where two independent draws agree to 0.002.
+    """
+    if len(a) <= a.shape[1] or len(b) <= b.shape[1]:
+        raise SystemExit(
+            f"need more samples than dimensions: {len(a)} and {len(b)} samples, {a.shape[1]} dims"
+        )
     mu_a, mu_b = a.mean(axis=0), b.mean(axis=0)
     sa = np.cov(a, rowvar=False)
     sb = np.cov(b, rowvar=False)
@@ -110,6 +122,18 @@ def check_prefilter(samples: np.ndarray, references: np.ndarray, count: int = 8)
     return float(worst)
 
 
+def gradient_energy(images: np.ndarray) -> float:
+    """Mean absolute horizontal plus vertical difference, in pixel units.
+
+    A blurred image has small differences between neighbouring pixels however
+    well its colours match, so this separates "smooth" from "realistic" in a way
+    an 8x8 pooled Frechet distance cannot.
+    """
+    horizontal = np.abs(np.diff(images, axis=2)).mean()
+    vertical = np.abs(np.diff(images, axis=3)).mean()
+    return float(horizontal + vertical)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--samples", type=Path, required=True)
@@ -118,12 +142,12 @@ def main() -> None:
     parser.add_argument("--size", type=int, required=True)
     parser.add_argument("--grid", type=int, default=8)
     parser.add_argument("--json", type=Path)
-    parser.add_argument("--legacy-dump", action="store_true")
+    parser.add_argument("--legacy-samples", action="store_true")
     args = parser.parse_args()
 
-    samples = load_f32(args.samples)
-    held = load_u8(args.held, args.size, args.legacy_dump)
-    train = load_u8(args.train, args.size, args.legacy_dump)
+    samples = load_f32(args.samples, args.legacy_samples)
+    held = load_u8(args.held, args.size)
+    train = load_u8(args.train, args.size)
     print(f"samples {samples.shape}, held {held.shape}, train {train.shape}")
 
     result = {
@@ -135,6 +159,9 @@ def main() -> None:
     # would score.
     result["heldout_nearest_l1"] = nearest_l1(held, train)
     result["prefilter_error"] = check_prefilter(samples, train)
+    result["grad_energy"] = gradient_energy(samples)
+    result["held_grad_energy"] = gradient_energy(held)
+    result["grad_ratio"] = result["grad_energy"] / result["held_grad_energy"]
     print(json.dumps(result, indent=2))
     if args.json:
         args.json.write_text(json.dumps(result, indent=2))
