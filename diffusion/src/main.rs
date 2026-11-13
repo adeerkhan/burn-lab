@@ -213,6 +213,7 @@ fn train(options: &Options) {
     if options.sampling_timesteps == 0 {
         options.sampling_timesteps = 50.min(options.timesteps);
     }
+    options.sampling_timesteps = options.sampling_timesteps.min(options.timesteps);
     let options = &options;
     let config = checkpoint_config(options);
     let mut diffusion = build(&config, &device);
@@ -414,11 +415,20 @@ fn sample(options: &Options) {
     let model = Unet::new(&unet_config(&config), &device);
     let record = ModuleRecord::load(format!("{directory}/model")).expect("load the model");
     let model = model.load_record(record);
-    let sampling = if options.sampling_timesteps > 0 {
+    let requested = if options.sampling_timesteps > 0 {
         options.sampling_timesteps
     } else {
         config.sampling_timesteps
     };
+    // The model defines the chain: a DDPM request longer than the trained
+    // timesteps cannot be honoured, and reporting the request would be a lie.
+    let sampling = requested.min(config.timesteps);
+    if requested > sampling {
+        println!(
+            "note: model has {} timesteps; running the full {sampling}-step DDPM chain",
+            config.timesteps
+        );
+    }
     let diffusion = GaussianDiffusion::new(
         model,
         config.image_size,

@@ -121,17 +121,25 @@ same data.
 DDIM and DDPM are two trajectories through **one** set of weights, so there is
 one model and four ways to sample it. 128 images per trajectory, EMA weights:
 
-| Sampler | Steps | Time, 128 images | Time, 16 images | nearest-training L1 | Frechet (8x8x3) |
+| Sampler | Steps | Images | Time | nearest-training L1 | Frechet (8x8x3) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| DDIM | 20 | 34.3 s | 1.2 s | 0.292 | 6.11 |
-| DDIM | 50 | 24.0 s | 1.3 s | 0.304 | 4.91 |
-| DDPM | 200 | 85.7 s | 4.3 s | 0.293 | 4.76 |
-| DDPM | 1,000 | not run | — | — | — |
+| DDIM | 20 | 128 | 34.3 s | 0.292 | 6.11 |
+| DDIM | 50 | 128 | 24.0 s | 0.304 | 4.91 |
+| DDPM | 200 | 128 | 85.7 s | 0.293 | 4.76 |
+| DDPM | 200 (repeat draw) | 128 | 88.0 s | 0.295 | 6.30 |
 
-The first DDIM-20 line is slower than DDIM-50 because it pays for shader
-compilation. DDPM at 1,000 steps was dropped when the hour ran out; at 0.43 s
-per step for 16 images it would have cost about 7 minutes for the grid, which
-was the remaining allowance.
+The DDIM-20 line is slower than DDIM-50 because the first process in a session
+pays for shader compilation; one 16-image DDIM-20 grid takes 1.2 s, and a
+16-image full DDPM chain takes 17.9 s.
+
+**A 1,000-step DDPM chain does not exist for this model.** It was trained with
+200 timesteps, and DDPM must run the chain it was trained on; asking for 1,000
+used to run the 200-step chain while printing "1,000 steps", which is fixed
+(`GLM-033`). The repeat row is that same trajectory drawn again with another
+seed: identical weights, identical chain, FID 4.76 against 6.30. **The Frechet
+number moves by 1.5 between draws at 128 samples**, so differences below that
+are sampling noise, not quality. That is why the model-versus-baseline gap below
+is reported as a tie rather than a win.
 
 ![Samplers: real, DDIM 20, DDIM 50, DDPM 200](../docs/ddpm64-comparison.webp)
 
@@ -251,15 +259,21 @@ resumed run continues with a fresh optimizer rather than replaying bit for bit.
 
 ## Deviations from the reference
 
-- **Synthetic shapes, not CIFAR-10.** The reference trains on a folder of images
-  through `torchvision`. That download is not part of this example; eight
-  templates keep it self-contained and make the metric meaningful.
+- **Synthetic shapes by default, not CIFAR-10.** The reference trains on a folder
+  of images through `torchvision`. Eight templates keep the example
+  self-contained and make the closest-template metric meaningful; `--data`
+  loads a packed image file when a real distribution is wanted.
 - **No self-conditioning.** The reference has an optional second pass that feeds
   back the predicted `x0`; it is left out rather than half-implemented.
 - **Memory keys and values are deterministic.** The reference draws them with
   `randn`; here they are a small fixed ramp. They are learnable either way.
-- **No flash attention, no FID, no `accelerate`.** Full attention is a plain
-  `softmax(q k^T / sqrt(d)) v`; quality is measured with a distance to the
-  closest template instead of FID.
+- **No flash attention, no `accelerate`.** Full attention is a plain
+  `softmax(q k^T / sqrt(d)) v`. Quality is measured with a nearest-training L1
+  and a Frechet distance on 8x8x3-pooled pixels, not full-resolution FID: a
+  12,288-dimensional covariance needs far more samples than one hour buys.
 - **The EMA is a plain blend.** `ema_pytorch` supports warmup and per-parameter
   decay; the port keeps the part the training loop uses.
+- **Resume restores weights, not optimizer state.** Burn's `AdamW` exposes no
+  moments, so `--resume` continues with a fresh optimizer; see `GLM-030`.
+- **wgpu can segfault at teardown.** About one process in ten dies after writing
+  its artefacts; the files are complete and the exit code is 139.
