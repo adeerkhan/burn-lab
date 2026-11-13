@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "setup": {
+    "data": "eight synthetic 16x16 RGB shapes",
+    "architecture": "Unet dim=16, dim_mults=(1,2,4,8), channels=3",
+    "parameters": 2439043,
+    "timesteps": 200,
+    "batch_size": 16,
+    "learning_rate": 0.0002,
+    "objective": "pred_v",
+    "beta_schedule": "sigmoid",
+    "device": "CPU (flex for ours, PyTorch CPU for the reference)",
+    "metric": "mean L1 distance from a sample to the closest of the eight templates"
+  },
+  "runs": [
+    {
+      "name": "untrained",
+      "ddim_20": 0.861,
+      "ddpm_200": null
+    },
+    {
+      "name": "reference, 900 steps",
+      "train_seconds": 83.4,
+      "ddim_20": 0.136,
+      "ddim_seconds": 0.6,
+      "ddpm_200": 0.133,
+      "ddpm_seconds": 5.2
+    },
+    {
+      "name": "ours, 900 steps",
+      "train_seconds": 192.6,
+      "ddim_20": 0.245,
+      "ddim_seconds": 1.11,
+      "ddpm_200": 0.188,
+      "ddpm_seconds": 11.21
+    },
+    {
+      "name": "reference, 3000 steps",
+      "train_seconds": 406.8,
+      "ddim_20": 0.052,
+      "ddim_seconds": 0.65,
+      "ddpm_200": 0.0397,
+      "ddpm_seconds": 9.15
+    },
+    {
+      "name": "ours, 3000 steps",
+      "train_seconds": 663.9,
+      "ddim_20": 0.076,
+      "ddim_seconds": 1.1,
+      "ddpm_200": 0.047,
+      "ddpm_seconds": 11.74
+    }
+  ],
+  "notes": [
+    "Parameter count matches the reference exactly (2,439,043), so the architecture is reproduced.",
+    "DDPM at 200 steps beats DDIM at 20 in every run, as expected.",
+    "At equal steps the reference is faster (407 s against 664 s at 3000) and slightly closer to the templates (0.0397 against 0.047 DDPM).",
+    "The 900-step gap narrows by 3000 steps, which points at training dynamics (Burn's default initialisers differ from PyTorch's) rather than a structural difference.",
+    "The reference has no test suite; only its training and inference paths can be run."
+  ]
+}

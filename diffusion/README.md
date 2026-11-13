@@ -32,17 +32,49 @@ One reference quirk is reproduced deliberately: it builds `v_start`/`v_end` with
 `torch.tensor(...)`, which is f32, and then divides an f64 tensor by them. Doing
 the same keeps the schedule buffers equal to the reference's.
 
-## Results
+## Results: ours against the reference, same data and budget
 
-900 steps, 16×16 shapes, `dim` 16, 200 timesteps, 20 DDIM steps, on `flex`:
+The reference has **no test suite** — no `tests/`, no `test_*` functions, no CI
+workflow — so what can be run is its training and inference paths. Both were run
+on the same eight shapes, the same architecture and the same budget.
 
-| | Mean L1 to the closest template |
-| --- | ---: |
-| Untrained | 0.861 |
-| After 900 steps (loss 0.216) | **0.277** |
+![Comparison](../docs/ddpm-comparison.webp)
 
-Training took 187 s; sampling 16 images took 1.0 s. The eight templates are the
-whole distribution, so a small distance means the model reproduces it.
+| Run | Params | Train | DDIM 20 | DDPM 200 |
+| --- | ---: | ---: | ---: | ---: |
+| Untrained | — | — | 0.861 | — |
+| Reference, 900 steps | 2,439,043 | 83 s | 0.136 (0.6 s) | **0.133** (5.2 s) |
+| Ours, 900 steps | 2,439,043 | 193 s | 0.245 (1.1 s) | **0.188** (11.2 s) |
+| Reference, 3000 steps | 2,439,043 | 407 s | 0.052 (0.7 s) | **0.0397** (9.2 s) |
+| Ours, 3000 steps | 2,439,043 | 664 s | 0.076 (1.1 s) | **0.047** (11.7 s) |
+
+Metric: mean L1 distance from a sample to the closest of the eight templates
+(zero would be a perfect reproduction).
+
+What this shows:
+
+- **The architecture is right**: the parameter count matches the reference
+  exactly, 2,439,043.
+- **Both samplers work, in both implementations.** DDPM at 200 steps beats DDIM
+  at 20 in every case (0.133 vs 0.136, 0.188 vs 0.245, 0.047 vs 0.076), which is
+  the expected trade.
+- **At equal steps the reference is still ahead, but by less over time.** At 900
+  steps it is 0.133 against 0.188; at 3000 it is 0.0397 against 0.047, and the
+  reference trains in 407 s against 664 s. The gap narrows rather than closing,
+  which points at training dynamics — Burn's default initialisers differ from
+  PyTorch's — rather than at a structural difference. The parameter count is
+  identical, so the architecture is not the explanation.
+- **Both reach recognisable shapes**: at 3000 steps a sample is within 0.047 mean
+  absolute difference of a template, against 0.861 for an untrained model.
+
+Reproduce with:
+
+```sh
+/tmp/glm-venv/bin/python scripts/ddpm_reference_run.py --steps 900
+cargo run -p diffusion --release -- train --steps 900 --batch 16 \
+    --image-size 16 --dim 16 --timesteps 200 --sampling-steps 20 --out artifacts/ddpm
+cargo run -p diffusion --release -- sample --ckpt artifacts/ddpm --sampling-steps 200
+```
 
 ## Usage
 

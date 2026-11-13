@@ -53,3 +53,19 @@ pub fn first_param(model: &Unet) -> f32 {
     model.visit(&mut first);
     first.0.expect("the model has parameters")
 }
+
+/// Total number of scalar parameters.
+pub fn param_count(model: &Unet) -> usize {
+    #[derive(Default)]
+    struct Count(usize);
+
+    impl ModuleVisitor for Count {
+        fn visit_float<const D: usize>(&mut self, param: &Param<Tensor<D>>) {
+            self.0 += param.val().dims().iter().product::<usize>();
+        }
+    }
+
+    let mut count = Count::default();
+    model.visit(&mut count);
+    count.0
+}

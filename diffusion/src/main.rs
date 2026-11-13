@@ -42,7 +42,7 @@ impl Default for Options {
             image_size: 32,
             dim: 32,
             timesteps: 1000,
-            sampling_timesteps: 50,
+            sampling_timesteps: 0, // 0 = use the train default, or the checkpoint's at sample time
             out: "artifacts/ddpm".to_string(),
             checkpoint: String::new(),
             samples: 16,
@@ -177,8 +177,18 @@ fn build(config: &CheckpointConfig, device: &Device) -> GaussianDiffusion {
 
 fn train(options: &Options) {
     let device = options.device().autodiff();
+    let mut options = options.clone();
+    if options.sampling_timesteps == 0 {
+        options.sampling_timesteps = 50.min(options.timesteps);
+    }
+    let options = &options;
     let config = checkpoint_config(options);
     let mut diffusion = build(&config, &device);
+    println!(
+        "Unet dim={} params={}",
+        config.dim,
+        diffusion::test_support::param_count(&diffusion.model)
+    );
     let mut ema = Ema::new(&diffusion.model, 0.995);
     let mut optimizer = AdamWConfig::new().init();
     let mut rng = diffusion::data::Rng::new(11);
@@ -260,11 +270,16 @@ fn sample(options: &Options) {
     let model = Unet::new(&unet_config(&config), &device);
     let record = ModuleRecord::load(format!("{directory}/model")).expect("load the model");
     let model = model.load_record(record);
+    let sampling = if options.sampling_timesteps > 0 {
+        options.sampling_timesteps
+    } else {
+        config.sampling_timesteps
+    };
     let diffusion = GaussianDiffusion::new(
         model,
         config.image_size,
         config.timesteps,
-        Some(config.sampling_timesteps),
+        Some(sampling),
         Objective::PredV,
         BetaSchedule::Sigmoid,
         false,
@@ -273,12 +288,18 @@ fn sample(options: &Options) {
 
     let started = std::time::Instant::now();
     let images = diffusion.sample(options.samples, &device);
+    let distance = diffusion::data::nearest_template_distance(images.clone(), config.image_size);
     println!(
-        "sampled {} images in {:.2}s",
+        "sampled {} images in {:.2}s with {sampling} steps; mean L1 to the closest template {distance:.3}",
         options.samples,
         started.elapsed().as_secs_f64()
     );
-    save_samples(images, &format!("{directory}/sample.png"));
+    let kind = if sampling < config.timesteps {
+        "ddim"
+    } else {
+        "ddpm"
+    };
+    save_samples(images, &format!("{directory}/sample-{kind}.png"));
 }
 
 /// A short run that has to show the loss falling, then samples.
