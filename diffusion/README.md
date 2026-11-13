@@ -130,7 +130,20 @@ distance is the same estimator as before: 8x8x3 pooled pixels, 192 dimensions.
 Held-out floors for reference: nearest L1 **0.329** at 64x64 (0.308 at 32x32);
 gradient energy **0.231**, so a perfect gradient ratio is 1.0.
 
+Recorded at the time, for the record and **not comparable** with the table above
+(128 samples, rank-deficient estimator; run A also in permuted space):
+
+| Recorded | Sampler | Fréchet | nearest L1 |
+| --- | --- | ---: | ---: |
+| A, permuted loader | DDIM 20 | 6.113 | 0.292 |
+| A, permuted loader | DDIM 50 | 4.905 | 0.304 |
+| A, permuted loader | DDPM 200 | 4.764 | 0.293 |
+| A, repeat draw | DDPM 200 | 6.302 | 0.295 |
+| baseline, 32x32 | DDIM 50 | 4.844 | 0.318 |
+
 ![Samplers: real, DDIM 20, DDIM 50, DDPM 200](../docs/ddpm64fix-comparison.webp)
+
+![Frechet and nearest-training L1](../docs/ddpm64fix-metrics.webp)
 
 ### Did the fix improve the model?
 
