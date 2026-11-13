@@ -286,8 +286,8 @@ It scores **5.131**, the best measured point: 0.83 below `dim 16` at 24k and 1.4
 below `dim 16` at 7k, with the closest palette of any stage (0.175 against the
 0.117 floor).
 
-The extension of that run to 26,000 steps was abandoned: the machine's GPU was
-shared with a game, the step rate fell from 0.19 to 0.4-0.7 s/step, and another
+The extension of that run to 26,000 steps was abandoned: the GPU was shared with
+another workload, the step rate fell from 0.19 to 0.4-0.7 s/step, and another
 13,000 steps would have taken about 1.8 h while no longer being an equal
 wall-clock comparison. It was stopped at its 13,000-step checkpoint.
 
