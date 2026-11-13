@@ -230,15 +230,20 @@ impl RawImages {
     pub fn batch(&self, batch: usize, seed: u64, device: &Device) -> Tensor<4> {
         let mut rng = Rng::new(seed);
         let stride = 3 * self.size * self.size;
+        let plane = self.size * self.size;
         let mut pixels = Vec::with_capacity(batch * stride);
         for _ in 0..batch {
             let index = rng.below(self.count);
             let offset = index * stride;
-            pixels.extend(
-                self.data[offset..offset + stride]
-                    .iter()
-                    .map(|byte| *byte as f32 / 127.5 - 1.0),
-            );
+            // The file is interleaved RGB (`RGBRGB...`) but a tensor is
+            // `[channels, height, width]`, so the planes have to be separated.
+            // Copying the bytes straight through would hand the model an
+            // interleaved permutation of the image.
+            for channel in 0..3 {
+                for pixel in 0..plane {
+                    pixels.push(self.data[offset + 3 * pixel + channel] as f32 / 127.5 - 1.0);
+                }
+            }
         }
         Tensor::<4>::from_data(
             TensorData::new(pixels, [batch, 3, self.size, self.size]),
@@ -256,26 +261,40 @@ impl RawImages {
             .convert::<f32>()
             .try_to_vec::<f32>()
             .unwrap();
+        // Draw *distinct* references: with replacement, a "256-image" subset can
+        // be much smaller in practice, which makes the score a noisy random
+        // variable and weakens the proxy.
         let mut rng = Rng::new(seed);
-        let references: Vec<&[u8]> = (0..subset.min(self.count))
-            .map(|_| {
-                let index = rng.below(self.count);
-                &self.data[index * stride..(index + 1) * stride]
-            })
+        let wanted = subset.min(self.count);
+        let mut taken = vec![false; self.count];
+        let mut indices = Vec::with_capacity(wanted);
+        while indices.len() < wanted {
+            let index = rng.below(self.count);
+            if !taken[index] {
+                taken[index] = true;
+                indices.push(index);
+            }
+        }
+        let references: Vec<&[u8]> = indices
+            .iter()
+            .map(|index| &self.data[index * stride..(index + 1) * stride])
             .collect();
 
+        let plane = self.size * self.size;
         let mut total = 0.0f32;
         for index in 0..batch {
             let sample = &flat[index * stride..(index + 1) * stride];
             let mut best = f32::MAX;
             for reference in &references {
-                let distance: f32 = sample
-                    .iter()
-                    .zip(reference.iter())
-                    .map(|(a, b)| (a - (*b as f32 / 127.5 - 1.0)).abs())
-                    .sum::<f32>()
-                    / stride as f32;
-                best = best.min(distance);
+                // Samples are planar, references are interleaved.
+                let mut sum = 0.0f32;
+                for pixel in 0..plane {
+                    for channel in 0..3 {
+                        let value = reference[3 * pixel + channel] as f32 / 127.5 - 1.0;
+                        sum += (sample[channel * plane + pixel] - value).abs();
+                    }
+                }
+                best = best.min(sum / stride as f32);
             }
             total += best;
         }
