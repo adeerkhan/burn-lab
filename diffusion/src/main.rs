@@ -10,6 +10,7 @@ use diffusion::diffusion::{BetaSchedule, GaussianDiffusion, Objective};
 use diffusion::ema::Ema;
 use diffusion::flow::RectifiedFlow;
 use diffusion::unet::{Unet, UnetConfig};
+use diffusion::vit::{AttentionKind, Vit, VitConfig};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct CheckpointConfig {
@@ -24,6 +25,31 @@ struct CheckpointConfig {
     /// Train the velocity field of a rectified flow instead of a DDPM.
     #[serde(default)]
     flow: bool,
+    /// `cnn` (the reference UNet) or `vit`.
+    #[serde(default = "default_backbone")]
+    backbone: String,
+    #[serde(default = "default_patch")]
+    patch_size: usize,
+    #[serde(default = "default_depth")]
+    depth: usize,
+    #[serde(default = "default_heads")]
+    heads: usize,
+    /// Per-block attention for the ViT backbone: `full` or `linear`.
+    #[serde(default)]
+    attention: Vec<String>,
+}
+
+fn default_backbone() -> String {
+    "cnn".to_string()
+}
+fn default_patch() -> usize {
+    8
+}
+fn default_depth() -> usize {
+    8
+}
+fn default_heads() -> usize {
+    8
 }
 
 #[derive(Clone)]
@@ -47,6 +73,11 @@ struct Options {
     seed: u64,
     samples: usize,
     flow: bool,
+    vit: bool,
+    patch_size: usize,
+    depth: usize,
+    heads: usize,
+    attention: Vec<String>,
 }
 
 impl Default for Options {
@@ -71,6 +102,11 @@ impl Default for Options {
             seed: 11,
             samples: 16,
             flow: false,
+            vit: false,
+            patch_size: 8,
+            depth: 8,
+            heads: 8,
+            attention: Vec::new(),
         }
     }
 }
@@ -113,6 +149,16 @@ impl Options {
                 "--resume" => options.resume = true,
                 "--samples" => options.samples = value().parse().expect("samples"),
                 "--flow" => options.flow = true,
+                "--vit" => options.vit = true,
+                "--patch-size" => options.patch_size = value().parse().expect("patch size"),
+                "--depth" => options.depth = value().parse().expect("depth"),
+                "--heads" => options.heads = value().parse().expect("heads"),
+                "--attention" => {
+                    options.attention = value()
+                        .split(',')
+                        .map(|kind| kind.trim().to_string())
+                        .collect()
+                }
                 other => panic!("unknown flag `{other}`"),
             }
             index += 1;
@@ -139,6 +185,15 @@ fn checkpoint_config(options: &Options) -> CheckpointConfig {
         dim_mults: vec![1, 2, 4, 8],
         data: options.data.clone(),
         flow: options.flow,
+        backbone: if options.vit {
+            "vit".to_string()
+        } else {
+            "cnn".to_string()
+        },
+        patch_size: options.patch_size,
+        depth: options.depth,
+        heads: options.heads,
+        attention: options.attention.clone(),
     }
 }
 
@@ -205,12 +260,161 @@ fn main() {
         "train" => train(&options),
         "sample" => sample(&options),
         "smoke" => smoke(&options),
+        "search-attention" => search_attention(&options),
         other => panic!("unknown command `{other}`, expected train, sample or smoke"),
     }
 }
 
+/// The backbone named by the checkpoint: the reference UNet, or the ViT port.
+fn build_model(config: &CheckpointConfig, device: &Device) -> Unet {
+    if config.backbone == "vit" {
+        Unet::Vit(Vit::new(
+            &VitConfig {
+                image_size: config.image_size,
+                patch_size: config.patch_size,
+                channels: config.channels,
+                dim: config.dim,
+                depth: config.depth,
+                heads: config.heads,
+                mlp_ratio: 4,
+                attention: if config.attention.is_empty() {
+                    vec![AttentionKind::Full; config.depth]
+                } else {
+                    config
+                        .attention
+                        .iter()
+                        .map(|kind| match kind.as_str() {
+                            "linear" => AttentionKind::Linear,
+                            _ => AttentionKind::Full,
+                        })
+                        .collect()
+                },
+            },
+            device,
+        ))
+    } else {
+        Unet::new(&unet_config(config), device)
+    }
+}
+
+/// JetViT's post-training attention search, in its parameter-compatible form.
+///
+/// Starting from a trained full-attention ViT, each block is switched to ReLU
+/// linear attention in turn — same `to_qkv`/`to_out` weights, so nothing is
+/// retrained — and the model is kept if the flow loss on a fixed set of
+/// *training* batches does not rise by more than `tolerance`. The chosen
+/// schedule is written to `--out`, which then samples exactly like any other
+/// checkpoint.
+fn search_attention(options: &Options) {
+    let device = options.device();
+    let directory = if options.checkpoint.is_empty() {
+        panic!("search-attention needs --ckpt")
+    } else {
+        options.checkpoint.clone()
+    };
+    let text = std::fs::read_to_string(format!("{directory}/config.json")).expect("read config");
+    let mut config: CheckpointConfig = serde_json::from_str(&text).expect("parse config");
+    if config.backbone != "vit" {
+        panic!("search-attention only applies to the ViT backbone");
+    }
+    let output = if options.out.is_empty() || options.out == "artifacts/ddpm" {
+        format!("{directory}-search")
+    } else {
+        options.out.clone()
+    };
+
+    // Start from all-full attention and the checkpoint's EMA weights.
+    config.attention = vec!["full".to_string(); config.depth];
+    let base = build_model(&config, &device)
+        .load_record(ModuleRecord::load(format!("{directory}/model")).expect("load the model"));
+
+    // Fixed evaluation batches from the training split: the held-out split is
+    // never read here.
+    let images = diffusion::data::RawImages::load(&config.data, config.image_size);
+    let mut rng = diffusion::data::Rng::new(options.seed);
+    let batches: Vec<(Tensor<4>, Vec<f32>, Tensor<4>)> = (0..8)
+        .map(|_| {
+            let data = images.batch(options.batch, rng.next_u64(), &device);
+            let times: Vec<f32> = (0..options.batch).map(|_| rng.unit()).collect();
+            let noise = Tensor::<4>::random(
+                [options.batch, 3, config.image_size, config.image_size],
+                burn::tensor::Distribution::Normal(0.0, 1.0),
+                &device,
+            );
+            (data, times, noise)
+        })
+        .collect();
+
+    let evaluate = |model: &Unet| -> f32 {
+        let flow = RectifiedFlow::new(model.clone(), config.image_size);
+        let total: f32 = batches
+            .iter()
+            .map(|(data, times, noise)| {
+                flow.p_losses(data.clone(), times, noise.clone(), &device)
+                    .into_scalar::<f32>()
+            })
+            .sum();
+        total / batches.len() as f32
+    };
+
+    let baseline = evaluate(&base);
+    println!("full attention: loss {baseline:.5}");
+
+    let mut kinds = vec!["full".to_string(); config.depth];
+    let tolerance = 1.02;
+    let mut current = base;
+    for block in 0..config.depth {
+        let mut candidate = kinds.clone();
+        candidate[block] = "linear".to_string();
+        config.attention = candidate.clone();
+        let model = build_model(&config, &device)
+            .load_record(ModuleRecord::load(format!("{directory}/model")).expect("load weights"));
+        let loss = evaluate(&model);
+        let accepted = loss <= baseline * tolerance;
+        println!(
+            "block {block}: linear loss {loss:.5} ({:+.2}%) -> {}",
+            (loss / baseline - 1.0) * 100.0,
+            if accepted { "keep linear" } else { "keep full" }
+        );
+        if accepted {
+            kinds = candidate;
+            current = model;
+        }
+    }
+
+    config.attention = kinds.clone();
+    std::fs::create_dir_all(&output).ok();
+    current
+        .clone()
+        .valid()
+        .into_record()
+        .save(format!("{output}/model"))
+        .expect("save the searched model");
+    std::fs::write(
+        format!("{output}/config.json"),
+        serde_json::to_string_pretty(&config).expect("serialise"),
+    )
+    .expect("write the config");
+    let source_progress = std::fs::read_to_string(format!("{directory}/progress.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let mut progress = source_progress;
+    progress["attention"] = serde_json::json!(kinds);
+    progress["linear_blocks"] =
+        serde_json::json!(kinds.iter().filter(|kind| *kind == "linear").count());
+    progress["source"] = serde_json::json!(directory);
+    std::fs::write(
+        format!("{output}/progress.json"),
+        serde_json::to_string_pretty(&progress).expect("serialise"),
+    )
+    .expect("write progress");
+    println!("wrote {output} with kinds {kinds:?}");
+    leave_after_writing();
+}
+
 fn build(config: &CheckpointConfig, device: &Device) -> GaussianDiffusion {
-    let model = Unet::new(&unet_config(config), device);
+    let model = build_model(config, device);
     GaussianDiffusion::new(
         model,
         config.image_size,
@@ -237,7 +441,7 @@ impl Trainer {
     fn new(config: &CheckpointConfig, device: &Device) -> Self {
         if config.flow {
             Self::Flow(Box::new(RectifiedFlow::new(
-                Unet::new(&unet_config(config), device),
+                build_model(config, device),
                 config.image_size,
             )))
         } else {
@@ -525,7 +729,7 @@ fn sample(options: &Options) {
     let text = std::fs::read_to_string(format!("{directory}/config.json")).expect("read config");
     let config: CheckpointConfig = serde_json::from_str(&text).expect("parse config");
 
-    let model = Unet::new(&unet_config(&config), &device);
+    let model = build_model(&config, &device);
     let record = ModuleRecord::load(format!("{directory}/model")).expect("load the model");
     let model = model.load_record(record);
     let requested = if options.sampling_timesteps > 0 {

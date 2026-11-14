@@ -8,3 +8,4 @@ pub mod flow;
 pub mod inspect;
 pub mod test_support;
 pub mod unet;
+pub mod vit;

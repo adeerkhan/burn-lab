@@ -407,9 +407,9 @@ impl Upsample {
     }
 }
 
-/// The reference's `Unet`.
+/// The reference's convolutional `Unet`.
 #[derive(Module, Debug)]
-pub struct Unet {
+pub struct CnnUnet {
     init_conv: Conv2d,
     time_mlp_linear1: Linear,
     time_mlp_linear2: Linear,
@@ -516,7 +516,7 @@ impl Default for UnetConfig {
     }
 }
 
-impl Unet {
+impl CnnUnet {
     pub fn new(config: &UnetConfig, device: &Device) -> Self {
         let input_channels = config.channels;
         let init_dim = config.dim;
@@ -711,5 +711,70 @@ impl Unet {
         x = Tensor::cat(vec![x, residual], 1);
         let x = self.final_res_block.forward(x, Some(embedding));
         self.final_conv.forward(x)
+    }
+}
+
+/// The generative backbone: the reference's convolutional `Unet`, or the ViT
+/// port (`crate::vit`). Both are trained through the same objective, so the
+/// training loop, EMA and checkpointing do not care which one is inside.
+///
+/// The CNN variant is larger in memory than the ViT's handle-like struct; the
+/// enum is moved by value only at the optimizer step, so boxing would cost more
+/// than it saves.
+#[allow(clippy::large_enum_variant)]
+#[derive(Module, Debug)]
+pub enum Unet {
+    Cnn(CnnUnet),
+    Vit(crate::vit::Vit),
+}
+
+impl Unet {
+    /// The convolutional backbone from `UnetConfig`, the historical default.
+    pub fn new(config: &UnetConfig, device: &Device) -> Self {
+        Self::Cnn(CnnUnet::new(config, device))
+    }
+
+    /// Discrete-time denoising. Only the convolutional backbone implements the
+    /// DDPM schedule; the ViT is trained with rectified flow, which calls
+    /// `forward_continuous` instead.
+    pub fn forward(&self, x: Tensor<4>, times: &[i64]) -> Tensor<4> {
+        match self {
+            Self::Cnn(cnn) => cnn.forward(x, times),
+            Self::Vit(_) => {
+                panic!("the ViT backbone is trained with rectified flow; call forward_continuous")
+            }
+        }
+    }
+
+    /// Spatial reduction factor: the CNN's downsampling, or the ViT's patch size.
+    pub fn downsample_factor(&self) -> usize {
+        match self {
+            Self::Cnn(cnn) => cnn.downsample_factor(),
+            Self::Vit(vit) => vit.config().image_size / vit.config().patch_size,
+        }
+    }
+
+    /// Output channels of the backbone.
+    pub fn channels(&self) -> usize {
+        match self {
+            Self::Cnn(cnn) => cnn.channels,
+            Self::Vit(vit) => vit.config().channels,
+        }
+    }
+
+    /// The attention kind per block; empty for the convolutional backbone.
+    pub fn attention_kinds(&self) -> Vec<crate::vit::AttentionKind> {
+        match self {
+            Self::Cnn(_) => Vec::new(),
+            Self::Vit(vit) => vit.attention_kinds(),
+        }
+    }
+
+    /// Continuous-time velocity, used by rectified flow.
+    pub fn forward_continuous(&self, x: Tensor<4>, times: &[f32]) -> Tensor<4> {
+        match self {
+            Self::Cnn(cnn) => cnn.forward_continuous(x, times),
+            Self::Vit(vit) => vit.forward_continuous(x, times),
+        }
     }
 }

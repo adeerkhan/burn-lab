@@ -144,6 +144,76 @@ Three tests pin the pieces: the interpolation hits noise at `t = 0` and data at
 `t = 1` with the midpoint between them, the loss is finite and non-negative, and
 sampling is deterministic when the device is seeded.
 
+## Vision transformer backbone
+
+`src/vit.rs` ports the `ViT` from
+[`lucidrains/vit-pytorch`](https://github.com/lucidrains/vit-pytorch): patch
+embedding, learned positions, pre-norm transformer blocks, a final norm. Two
+changes make it a generative backbone, both marked in the code: a per-block
+AdaLN modulation driven by a sinusoidal time embedding (the DiT recipe; the
+reference is a classifier and has no conditioning), and a patch projection in
+place of the class head.
+
+`Unet` is now an enum over the convolutional backbone and the ViT, so the flow
+loop, EMA, checkpoints and the sampler did not change.
+
+**Configuration.** patch 8 (64 tokens at 64x64), `dim 256`, depth 8, heads 8,
+MLP ratio 4: **20,341,696 parameters**. Trained with the same rectified flow,
+data, seed and 13,000 steps as the UNet model (3,231.9 s).
+
+| Backbone | Params | pixel-FID | gradient ratio | Sample, 20 steps |
+| --- | ---: | ---: | ---: | ---: |
+| UNet, `dim 24` | 5.28 M | **3.170 +- 0.074** | 1.063 | 2.60 s / 128 |
+| ViT, `dim 256` | 20.34 M | 7.666 +- 0.279 | 1.479 | **1.72 s / 128** |
+
+The ViT is clearly worse at this budget, and faster per sample: attention over
+64 tokens is cheap, so it draws 128 images in 1.72 s against the UNet's 2.60 s.
+Quality is not close, though. Three draws scored 7.978, 7.460 and 7.559. Its gradient ratio of 1.48 is the giveaway: the images carry far too much
+high-frequency energy, and the cause is visible — the 8x8 patch grid is
+imprinted on every sample. Twenty million parameters on 3,303 images for 13,000
+steps is not enough for this architecture; the UNet has inductive biases the
+ViT must learn from data.
+
+![Real flowers, UNet flow, ViT flow, ViT with linear blocks](../docs/quality-vit.webp)
+
+### JetViT post-training attention search
+
+[JetViT](https://arxiv.org/abs/2605.26636) (CVPR 2026 Findings) converts a
+pre-trained full-attention ViT into a hybrid by *replacing* attention blocks
+with cheaper ones and inheriting the weights, keeping only a few critical full
+blocks. `search-attention` implements the part that can be done without new
+parameters:
+
+- `AttentionKind::Full` — the reference's softmax attention.
+- `AttentionKind::Linear` — ReLU linear attention reusing the same `to_qkv` and
+  `to_out` weights, normalised by the summed keys, so a trained block can be
+  swapped without retraining it.
+
+The search switches one block at a time and keeps a linear block if the flow
+loss on eight fixed *training* batches (never the held-out split) does not rise
+by more than 2%.
+
+**What it found: nothing transfers.** Every block rejected the swap, with losses
+92% to 734% higher:
+
+| Block | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Linear loss vs full | +409% | +468% | +93% | +127% | +129% | +97% | +389% | +734% |
+
+Forcing the four least-bad middle blocks to linear and fine-tuning 2,000 steps
+made it worse, not better: FID 66-69 and a gradient ratio of 9.9 — the samples
+are pure high-frequency noise. The paper's pipeline distils the swapped model
+for thousands of steps and uses its own linear block (ReLU attention plus a
+squeeze dynamic convolution, with normalisation); a parameter-compatible swap
+plus a short fine-tune is not the same thing.
+
+At 64 tokens there is also nothing to win: full attention over 64 tokens is
+already cheap, and the linear variant was *slower* (1.82 s against 1.72 s per 128
+images) because of the extra reductions. JetViT's
+efficiency case is about thousands of tokens at high resolution; this
+experiment can speak to quality, not to speed.
+
+
 ## What is ported
 
 | Reference | Here |

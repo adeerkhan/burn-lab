@@ -304,6 +304,15 @@ cargo run -p diffusion --release -- sample --backend wgpu \
 Its schedules and `q_sample` are checked against values extracted from the reference source, and the
 parameter count matches the reference to the digit (2,439,043 at `dim 16`).
 
+A **ViT backbone** from [`vit-pytorch`](https://github.com/lucidrains/vit-pytorch) (20.3M parameters,
+patch 8, 64 tokens) was trained under the same flow objective for the same 13,000 steps: **pixel-FID
+7.67 ± 0.28**, against the UNet's 3.17. It is undertrained at this scale and the 8×8 patch grid shows
+in every sample. The **JetViT** post-training attention search
+([CVPR 2026](https://arxiv.org/abs/2605.26636)) was implemented for the parameter-compatible swap and
+rejected every block: linear attention cost 92–734% loss, and forcing four blocks plus a short
+fine-tune produced noise (FID 66). Details and the picture are in
+[`diffusion/README.md`](diffusion/README.md).
+
 ## Repository layout
 
 ```
