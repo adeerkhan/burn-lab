@@ -282,6 +282,8 @@ held out, at 64×64.
 
 <img src="docs/examples-flow.webp" alt="Real flowers, then rectified flow at 10, 20 and 50 steps" width="100%"/>
 
+<img src="docs/quality-comparison.webp" alt="64 samples each from real flowers, DDIM 50, DDPM 200 and rectified flow at 10, 20 and 50 steps" width="100%"/>
+
 512 samples per draw, three draws per sampler where a spread is shown, EMA weights, 8×8×3 pooled pixels. The full study — the estimator's floor, the
 FID-versus-steps curve, the cap-capacity experiment and the loader fix that preceded it — is in
 [`diffusion/README.md`](diffusion/README.md), and the weights that produced these rows are in

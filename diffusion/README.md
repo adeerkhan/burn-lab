@@ -102,6 +102,31 @@ cargo run -p diffusion --release -- sample --backend wgpu \
 The weights are in
 [`models/flowers-64-flow-dim24-13k`](../models/flowers-64-flow-dim24-13k).
 
+### Visual comparison
+
+Sixty-four samples per method, same 64x64 grid, same held-out reference row:
+
+![Real flowers, DDIM 50, DDPM 200, flow at 10/20/50 steps](../docs/quality-comparison.webp)
+
+Four samples per method at 3x zoom, where the difference is easiest to see:
+
+![Detail: real, DDIM 50, DDPM 200, flow 20](../docs/quality-detail.webp)
+
+What the pictures show, in the same order as the numbers:
+
+- **DDIM 50** produces soft colour masses. The palette is right; individual
+  flowers dissolve into blur.
+- **DDPM 200** is slightly crisper — petal edges and flower centres appear — but
+  still reads as an impressionist painting.
+- **Flow at 20 steps** is visibly the sharpest: daisy petals, poppy clusters and
+  sunflower centres hold their shape, with foliage and sky behind them. Some
+  images still collapse into colour fields, and none is photographic.
+
+The gradient-energy ratio tracks what the eye sees: flow 1.06 against DDIM 0.94
+and DDPM 0.97, where 1.00 is a real photograph's texture. The samples are not
+memorised training images — their nearest-training L1 (0.334) is *higher* than
+the distance a real held-out image scores (0.329).
+
 ### What is ported, and what is not
 
 | Reference | Here |

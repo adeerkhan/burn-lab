@@ -84,7 +84,13 @@ def metric_bars(metrics: dict, path: Path) -> None:
     print(f"wrote {path}")
 
 
-def raw_grid(source: Path, path: Path, count: int = 16, columns: int = 4, scale: int = 3) -> None:
+def raw_grid(
+    source: Path,
+    path: Path,
+    count: int = 16,
+    columns: int = 4,
+    scale: int = 3,
+) -> None:
     """Tile the first `count` samples from a raw f32 NCHW dump into a PNG."""
     meta = json.loads(Path(f"{source}.json").read_text())
     _, channels, height, width = meta["shape"]
@@ -124,6 +130,9 @@ def main() -> None:
     parser.add_argument("--metrics", type=Path)
     parser.add_argument("--grid", action="append", default=[], metavar="LABEL=PATH")
     parser.add_argument("--render-raw", action="append", default=[], metavar="PATH")
+    parser.add_argument("--raw-count", type=int, default=16)
+    parser.add_argument("--raw-columns", type=int, default=4)
+    parser.add_argument("--raw-scale", type=int, default=3)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--scale", type=int, default=2)
     args = parser.parse_args()
@@ -134,7 +143,13 @@ def main() -> None:
     if args.metrics:
         metric_bars(json.loads(args.metrics.read_text()), args.out / "metrics.png")
     for source in args.render_raw:
-        raw_grid(Path(source), args.out / f"grid-{Path(source).stem}.png")
+        raw_grid(
+            Path(source),
+            args.out / f"grid-{Path(source).stem}.png",
+            count=args.raw_count,
+            columns=args.raw_columns,
+            scale=args.raw_scale,
+        )
     if args.grid:
         grids = []
         for item in args.grid:
