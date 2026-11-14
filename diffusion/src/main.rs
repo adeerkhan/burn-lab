@@ -465,7 +465,10 @@ fn sample(options: &Options) {
 
     let started = std::time::Instant::now();
     let images = diffusion.sample(options.samples, &device);
-    let raw = if config.data.is_empty() {
+    // A published checkpoint records the training file it was fitted on, which
+    // will not exist on another machine. Sampling must still work; only the
+    // nearest-training distance needs the data.
+    let raw = if config.data.is_empty() || !std::path::Path::new(&config.data).exists() {
         None
     } else {
         Some(diffusion::data::RawImages::load(
@@ -474,19 +477,31 @@ fn sample(options: &Options) {
         ))
     };
     let distance = match &raw {
-        Some(source) => source.nearest_training_distance(images.clone(), 256, 5),
-        None => diffusion::data::nearest_template_distance(images.clone(), config.image_size),
+        Some(source) => Some(source.nearest_training_distance(images.clone(), 256, 5)),
+        None if config.data.is_empty() => Some(diffusion::data::nearest_template_distance(
+            images.clone(),
+            config.image_size,
+        )),
+        None => None,
     };
-    println!(
-        "sampled {} images in {:.2}s with {sampling} steps; mean L1 to the {} {distance:.3}",
-        options.samples,
-        started.elapsed().as_secs_f64(),
-        if raw.is_some() {
-            "nearest training image"
-        } else {
-            "closest template"
-        }
-    );
+    match distance {
+        Some(distance) => println!(
+            "sampled {} images in {:.2}s with {sampling} steps; mean L1 to the {} {distance:.3}",
+            options.samples,
+            started.elapsed().as_secs_f64(),
+            if raw.is_some() {
+                "nearest training image"
+            } else {
+                "closest template"
+            }
+        ),
+        None => println!(
+            "sampled {} images in {:.2}s with {sampling} steps; dataset {} not found, distance skipped",
+            options.samples,
+            started.elapsed().as_secs_f64(),
+            config.data
+        ),
+    }
     let kind = if sampling < config.timesteps {
         "ddim"
     } else {
