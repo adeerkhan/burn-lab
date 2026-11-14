@@ -5,7 +5,7 @@
   ![Rust](https://img.shields.io/badge/Rust-1.95%2B-f15a24?style=flat-square&logo=rust&logoColor=white)
   ![Burn](https://img.shields.io/badge/Burn-0.23.0--pre.2-f15a24?style=flat-square)
   ![License](https://img.shields.io/badge/License-MIT-f15a24?style=flat-square)
-  ![Tests](https://img.shields.io/badge/tests-82%20passing-f15a24?style=flat-square)
+  ![Tests](https://img.shields.io/badge/tests-112%20passing-f15a24?style=flat-square)
 
   <p><b>A 25.7M-parameter language model — hybrid attention, sparse mixture of experts, four residual
   streams — pretrained from scratch and post-trained with executable-reward RL, all in Burn.</b></p>
@@ -260,15 +260,37 @@ Burn's dashboard only renders when stdout is a terminal, so
 
 ## A second workload: diffusion
 
-`diffusion/` ports `lucidrains/denoising-diffusion-pytorch` — the UNet, the
-schedules, DDPM and DDIM sampling, and the EMA. It is the counterpart to `glm53`:
-where that exercises attention and MoE on text, this exercises convolution,
-residual blocks and attention over a spatial grid.
+`diffusion/` ports [`lucidrains/denoising-diffusion-pytorch`](https://github.com/lucidrains/denoising-diffusion-pytorch)
+— the UNet, the three beta schedules, DDPM and DDIM sampling, and the EMA. It is the counterpart to
+`glm53`: where that exercises attention and MoE over text, this exercises convolution, residual
+blocks and attention over a spatial grid.
 
-Its schedules and `q_sample` are checked against values extracted from the
-reference source, and it trains a synthetic-shape dataset end to end: 900 steps
-move the sample-to-template distance from 0.861 to 0.277. See
-[`diffusion/README.md`](diffusion/README.md).
+It trains on real photographs, not toys: the TensorFlow `flower_photos` set, 3,303 train and 367
+held out, at 64×64.
+
+<img src="docs/examples-flowers.webp" alt="Real flowers, then DDIM 20, DDIM 50 and DDPM 200 samples from the saved model" width="100%"/>
+
+| Sampler | Steps | pixel-FID ↓ | nearest L1 | gradient ratio | colour distance |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| DDIM | 20 | 7.262 | 0.286 | 0.818 | 0.263 |
+| DDIM | 50 | 5.131 ± 0.233 | 0.313 | 0.939 | 0.175 |
+| **DDPM** | **200** | **4.761 ± 0.346** | 0.315 | 0.966 | 0.145 |
+| real images vs held out (floor) | — | 2.957 ± 0.234 | 0.329 | 1.000 | 0.117 |
+
+512 samples per draw, three draws per sampler where a spread is shown, EMA weights, 8×8×3 pooled pixels. The full study — the estimator's floor, the
+FID-versus-steps curve, the cap-capacity experiment and the loader fix that preceded it — is in
+[`diffusion/README.md`](diffusion/README.md), and the weights that produced these rows are in
+[`models/flowers-64-dim24-13k`](models/flowers-64-dim24-13k).
+
+Both samplers run on **one** checkpoint: DDIM and DDPM are two trajectories, not two models.
+
+```sh
+cargo run -p diffusion --release -- sample --backend wgpu \
+  --ckpt models/flowers-64-dim24-13k --samples 16 --sampling-steps 200
+```
+
+Its schedules and `q_sample` are checked against values extracted from the reference source, and the
+parameter count matches the reference to the digit (2,439,043 at `dim 16`).
 
 ## Repository layout
 
@@ -279,6 +301,7 @@ burn-lab/
 ├── bench/                # forward-pass benchmark against the PyTorch reference
 ├── docs/                 # figures + the script that renders them
 ├── diffusion/            # DDPM/DDIM port of denoising-diffusion-pytorch
+├── models/               # saved checkpoints, with their metrics and usage
 └── glm53/                # the GLM-5.3-Flash port
     ├── python/           # evaluator harness (AST allowlist + test runner)
     ├── src/

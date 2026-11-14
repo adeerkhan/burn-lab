@@ -1,0 +1,18 @@
+{
+  "config": {
+    "channels": 3,
+    "data": "/tmp/opencode/flowers/train64.bin",
+    "dim": 24,
+    "dim_mults": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "image_size": 64,
+    "sampling_timesteps": 20,
+    "timesteps": 200
+  },
+  "ema_decay": 0.999,
+  "step": 13000
+}

@@ -8,6 +8,54 @@ It exists as a second, independent Burn workload next to `glm53`. Where that por
 is a language model, this one exercises convolution, residual blocks, attention
 over a spatial grid, and the diffusion maths that FLUX-style models share.
 
+## Examples: the saved flower model
+
+One checkpoint, two samplers. DDIM and DDPM are two trajectories through the
+same weights, so `models/flowers-64-dim24-13k` is the whole model — there is no
+"DDIM model" and "DDPM model".
+
+![Real flowers, DDIM 20, DDIM 50, DDPM 200](../docs/examples-flowers.webp)
+
+| Sampler | Steps | pixel-FID | nearest L1 | gradient ratio | colour distance |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| DDIM | 20 | 7.262 | 0.286 | 0.818 | 0.263 |
+| DDIM | 50 | 5.131 +- 0.233 | 0.313 | 0.939 | 0.175 |
+| **DDPM** | **200** | **4.761 +- 0.346** | 0.315 | 0.966 | 0.145 |
+| real images vs held out (floor) | — | 2.957 +- 0.234 | 0.329 | 1.000 | 0.117 |
+
+512 samples per row, EMA weights, 8x8x3 pooled pixels, three draws per sampler,
+the same 367 held-out images. The best single DDPM draw scored 4.474; the three
+draws were 4.474, 5.147 and 4.661, which is why the mean is reported.
+
+```sh
+cargo run -p diffusion --release -- sample --backend wgpu \
+  --ckpt models/flowers-64-dim24-13k --samples 16 --sampling-steps 200
+```
+
+The samples are painterly flower masses — sunflower heads, poppies, roses,
+foliage, skies — not photographs. At 64x64 individual petals are not resolved.
+The weights, their checksum and the full metric table are in
+[`models/flowers-64-dim24-13k`](../models/flowers-64-dim24-13k).
+
+### Against the PyTorch reference
+
+The port exists to be compared with the implementation it came from, not to
+replace it in a vacuum.
+
+| | This port | Reference (`lucidrains/denoising-diffusion-pytorch`) |
+| --- | --- | --- |
+| Parameters, `dim 16` | 2,439,043 | 2,439,043 |
+| Test suite | 112 workspace tests, five of them numerical parity against extracted reference values | **none** (no `tests/`, no CI) |
+| Synthetic shapes, 900 steps, L1 | 0.188 | 0.133 |
+| Synthetic shapes, 3,000 steps, L1 | 0.047 | 0.0397 |
+| Training, 3,000 steps | 664 s on wgpu | 407 s on CPU |
+| Flowers, 64x64 | pixel-FID 4.761 (saved checkpoint) | not run — the available reference environment is CPU-only, and 13,000 steps at 64x64 would take hours |
+
+The reference is faster on the synthetic study and slightly better on the
+distance metric; the port matches it to the digit on parameters and is the only
+one of the two that can be tested against the other. Its flower run is the part
+the reference has not been asked to do.
+
 ## What is ported
 
 | Reference | Here |
@@ -307,8 +355,17 @@ Weight sd `1.2e-2` to `2.6e-1` (median `5.5e-2`); gradient sd `4.2e-8` to
 
 ### Verdict
 
-**Pixel-FID did not reach 4.0. The best measured point is 5.131**, 2.17 above the
-matched floor of 2.96 and still 1.13 above the target.
+**Pixel-FID did not reach 4.0.** The study's frozen sampler (DDIM 50) bottoms at
+**5.131 +- 0.233**. Running the same saved weights through the **full DDPM chain**
+does better: **4.761 +- 0.346** over three draws, 1.80 above the floor and 0.76
+above the target. The best single DDPM draw reached 4.474, but its draws vary by
+0.35 — the full chain injects fresh noise at every step, so it explores more of
+the distribution per draw than DDIM, which repeated to within 0.002. The mean is
+the claim, not the best draw.
+
+Sampler choice is itself a lever: at 7,000 steps DDPM was slightly worse than
+DDIM (7.30 against 7.01); with 5.28 M parameters and 13,000 steps it is the best
+thing the model does.
 
 What blocks it, in order of evidence:
 

@@ -1,0 +1,14 @@
+{
+  "dim": 24,
+  "image_size": 64,
+  "channels": 3,
+  "timesteps": 200,
+  "sampling_timesteps": 20,
+  "dim_mults": [
+    1,
+    2,
+    4,
+    8
+  ],
+  "data": "/tmp/opencode/flowers/train64.bin"
+}
