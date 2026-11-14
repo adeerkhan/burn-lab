@@ -746,6 +746,33 @@ impl Unet {
         }
     }
 
+    /// Save the *inner* backbone, so the record keys do not depend on which
+    /// variant of this enum a checkpoint happens to use.
+    pub fn save_record(&self, path: &str) {
+        match self {
+            Self::Cnn(module) => module
+                .clone()
+                .valid()
+                .into_record()
+                .save(path)
+                .expect("save the model record"),
+            Self::Vit(module) => module
+                .clone()
+                .valid()
+                .into_record()
+                .save(path)
+                .expect("save the model record"),
+        }
+    }
+
+    /// Load an inner-backbone record, the mirror of `save_record`.
+    pub fn load_record_from(self, record: burn::store::ModuleRecord) -> Self {
+        match self {
+            Self::Cnn(module) => Self::Cnn(module.load_record(record)),
+            Self::Vit(module) => Self::Vit(module.load_record(record)),
+        }
+    }
+
     /// Spatial reduction factor: the CNN's downsampling, or the ViT's patch size.
     pub fn downsample_factor(&self) -> usize {
         match self {

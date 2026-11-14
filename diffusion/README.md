@@ -127,22 +127,73 @@ and DDPM 0.97, where 1.00 is a real photograph's texture. The samples are not
 memorised training images — their nearest-training L1 (0.334) is *higher* than
 the distance a real held-out image scores (0.329).
 
+### Reflow: one-step sampling
+
+Reflow is the paper's second rectification pass. The model is retrained on
+`(noise, frozen.sample(noise))` pairs: the endpoint is what the old model
+produces from that exact noise, so the new model only has to learn a straight
+line to it. The path is straightened, and one or two ODE steps become usable.
+
+`make-pairs` draws the pairs once from a frozen copy and caches them;
+`reflow` then trains on the cache. Caching matters: sampling a fresh pair every
+step costs twenty network evaluations per training step, which made a 6,000-step
+run take hours instead of eighteen minutes.
+
+```sh
+cargo run -p diffusion --release -- make-pairs --backend wgpu \
+    --ckpt models/flowers-64-flow-dim24-13k --count 2048 --batch 64 \
+    --sampling-steps 20 --pairs /tmp/pairs
+
+cargo run -p diffusion --release -- reflow --backend wgpu \
+    --ckpt models/flowers-64-flow-dim24-13k --pairs /tmp/pairs \
+    --steps 6000 --batch 16 --out /tmp/reflow
+```
+
+6,000 steps on 2,048 cached pairs, 1,077.5 s. 512 samples per draw, one draw per
+row:
+
+| ODE steps | 1 | 2 | 4 | 10 | 20 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| base flow | 11.528 | 10.805 | — | 3.264 | **3.170** |
+| **reflow** | **4.080** | **4.434** | **4.191** | 3.625 | 3.745 |
+
+**At one step reflow is 2.8x better**: 4.080 against 11.528, which is the
+difference between a flower and a colour smear. The price is the asymptotic end:
+at twenty steps the base model is still ahead, 3.170 against 3.745, because
+straightening the path trades a little of the fine detail the curved path was
+carrying. That is the trade the paper describes, measured on the same estimator
+as everything else here.
+
+![Real flowers, then reflow at 1, 4 and 20 steps](../docs/quality-reflow.webp)
+
+Two caveats. The cache is 2,048 pairs, reused about 47 times each over the run;
+a larger cache or fresh pairs would likely close the 20-step gap. And 6,000
+steps is short for a second training pass — the reference trains reflow for tens
+of thousands.
+
 ### What is ported, and what is not
 
 | Reference | Here |
 | --- | --- |
-| `noise.lerp(data, t)`, target `data - noise`, plain MSE | `RectifiedFlow::p_losses` |
-| `odeint(..., method='midpoint')` over `linspace(0, 1, steps)` | `RectifiedFlow::sample`, fixed-step midpoint |
-| continuous time conditioning (times in `[0, 1]`) | `Unet::forward_continuous` and `SinusoidalPosEmb::forward_continuous` |
+| `noise.lerp(data, t)`, target `data - noise`, MSE | `RectifiedFlow::p_losses` |
+| `predict='flow' \| 'noise' \| 'clean'` | `Predict` |
+| `loss_fn='mse' \| 'pseudo_huber'` | `FlowLoss` |
+| `noise_schedule=identity \| cosmap` | `NoiseSchedule` |
+| `immiscible` pairing | greedy optimal transport inside the batch |
+| `use_consistency` | data-match and velocity-match against the EMA |
+| `odeint(..., method='midpoint')` | `RectifiedFlow::sample`, fixed-step midpoint |
+| continuous time conditioning | `Unet::forward_continuous` |
+| `Reflow` | the `reflow` and `make-pairs` subcommands |
 
-Not ported, because they are optional research branches rather than the base
-algorithm: reflow (the second rectification pass), consistency flow matching,
-the LPIPS and pseudo-Huber losses, the mean/variance head, immiscible pairing and
-the Welford normaliser.
+Not ported: `pseudo_huber_with_lpips` (needs VGG16 weights that are not
+available offline), `mean_variance_net` (probabilistic output, unused by any
+sampler here) and `auto_normalize` (the flowers are already in `[-1, 1]`, and
+running statistics would have to be checkpointed with the weights).
 
-Three tests pin the pieces: the interpolation hits noise at `t = 0` and data at
-`t = 1` with the midpoint between them, the loss is finite and non-negative, and
-sampling is deterministic when the device is seeded.
+Seven tests pin the pieces: interpolation endpoints, a finite loss for every
+predict/loss/immiscible combination, cosmap's endpoints and symmetry, the
+consistency term with an EMA, seeded sampling determinism, and single-step
+sampling.
 
 ## Vision transformer backbone
 

@@ -56,7 +56,7 @@ fn the_flow_loss_is_finite_and_non_negative() {
     let data = Tensor::<4>::random([2, 3, 16, 16], Distribution::Normal(0.0, 1.0), &device);
     let noise = Tensor::<4>::random([2, 3, 16, 16], Distribution::Normal(0.0, 1.0), &device);
 
-    let loss = flow.p_losses(data, &[0.1, 0.9], noise, &device);
+    let loss = flow.p_losses(data, &[0.1, 0.9], noise, &device, None);
     let value = loss.into_scalar::<f32>();
     assert!(value.is_finite(), "loss was {value}");
     assert!(value >= 0.0, "loss was {value}");

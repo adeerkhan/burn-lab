@@ -1,0 +1,30 @@
+{
+  "config": {
+    "attention": [],
+    "backbone": "cnn",
+    "channels": 3,
+    "consistency": false,
+    "data": "/tmp/opencode/flowers/train64.bin",
+    "depth": 8,
+    "dim": 24,
+    "dim_mults": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "flow": true,
+    "heads": 8,
+    "image_size": 64,
+    "immiscible": false,
+    "loss": "mse",
+    "patch_size": 8,
+    "predict": "flow",
+    "sampling_timesteps": 50,
+    "schedule": "identity",
+    "timesteps": 200
+  },
+  "ema_decay": 0.999,
+  "reflow": true,
+  "step": 6000
+}

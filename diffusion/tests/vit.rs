@@ -73,7 +73,7 @@ fn the_vit_trains_under_a_flow_loss() {
         burn::tensor::Distribution::Normal(0.0, 1.0),
         &device,
     );
-    let loss = flow.p_losses(data, &[0.2, 0.8], noise, &device);
+    let loss = flow.p_losses(data, &[0.2, 0.8], noise, &device, None);
     let value = loss.into_scalar::<f32>();
     assert!(value.is_finite() && value >= 0.0, "loss was {value}");
 }

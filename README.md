@@ -278,6 +278,7 @@ held out, at 64×64.
 | DDIM | 50 | 5.131 ± 0.233 | 0.313 | 0.939 | 0.175 |
 | DDPM | 200 | 4.761 ± 0.346 | 0.315 | 0.966 | 0.145 |
 | **rectified flow** | **20** | **3.170 ± 0.074** | 0.334 | 1.063 | 0.101 |
+| reflow | 1 | 4.080 | 0.331 | 1.072 | — |
 | real images vs held out (floor) | — | 2.957 ± 0.234 | 0.329 | 1.000 | 0.117 |
 
 <img src="docs/examples-flow.webp" alt="Real flowers, then rectified flow at 10, 20 and 50 steps" width="100%"/>
@@ -300,6 +301,8 @@ cargo run -p diffusion --release -- sample --backend wgpu \
 cargo run -p diffusion --release -- sample --backend wgpu \
   --ckpt models/flowers-64-flow-dim24-13k --samples 16 --sampling-steps 20
 ```
+
+The flow matching implementation is complete for every option that does not need external weights: three predict modes, MSE and pseudo-Huber losses, the cosmap schedule, immiscible pairing, consistency matching, and reflow. A reflow pass (6,000 steps on 2,048 cached pairs) cuts **one-step** pixel-FID from 11.53 to **4.08**, at the cost of 0.6 at twenty steps.
 
 Its schedules and `q_sample` are checked against values extracted from the reference source, and the
 parameter count matches the reference to the digit (2,439,043 at `dim 16`).
