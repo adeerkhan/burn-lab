@@ -154,10 +154,10 @@ row:
 
 | ODE steps | 1 | 2 | 4 | 10 | 20 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| base flow | 11.528 | 10.805 | — | 3.264 | **3.170** |
-| **reflow** | **4.080** | **4.434** | **4.191** | 3.625 | 3.745 |
+| base flow | 24.967 | 11.237 | — | 3.264 | **3.170** |
+| **reflow** | **4.418** | **4.360** | **4.191** | 3.625 | 3.745 |
 
-**At one step reflow is 2.8x better**: 4.080 against 11.528, which is the
+**At one step reflow is 5.6x better**: 4.418 against 24.967, which is the
 difference between a flower and a colour smear. The price is the asymptotic end:
 at twenty steps the base model is still ahead, 3.170 against 3.745, because
 straightening the path trades a little of the fine detail the curved path was

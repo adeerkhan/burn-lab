@@ -1106,7 +1106,8 @@ fn sample(options: &Options) {
     // number of steps, so a request below the trained timesteps is meaningful
     // there and is not clamped.
     let sampling = if config.flow {
-        requested.max(2)
+        // One Euler step is meaningful for a reflowed model.
+        requested.max(1)
     } else {
         requested.min(config.timesteps)
     };
