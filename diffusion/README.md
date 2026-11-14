@@ -23,8 +23,8 @@ same weights, so `models/flowers-64-dim24-13k` is the whole model — there is n
 | **DDPM** | **200** | **4.761 +- 0.346** | 0.315 | 0.966 | 0.145 |
 | real images vs held out (floor) | — | 2.957 +- 0.234 | 0.329 | 1.000 | 0.117 |
 
-512 samples per row, EMA weights, 8x8x3 pooled pixels, three draws per sampler,
-the same 367 held-out images. The best single DDPM draw scored 4.474; the three
+512 samples per row, EMA weights, 8x8x3 pooled pixels, three draws per sampler
+where a spread is shown, the same 367 held-out images. The best single DDPM draw scored 4.474; the three
 draws were 4.474, 5.147 and 4.661, which is why the mean is reported.
 
 ```sh
