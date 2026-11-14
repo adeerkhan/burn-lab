@@ -1,4 +1,5 @@
-//! Train and sample a DDPM/DDIM on synthetic shape images.
+//! Train and sample a DDPM/DDIM or a rectified flow on synthetic shapes or
+//! packed photographs.
 
 use burn::module::Module;
 use burn::optim::{AdamWConfig, GradientsParams};
@@ -7,6 +8,7 @@ use burn::store::ModuleRecord;
 
 use diffusion::diffusion::{BetaSchedule, GaussianDiffusion, Objective};
 use diffusion::ema::Ema;
+use diffusion::flow::RectifiedFlow;
 use diffusion::unet::{Unet, UnetConfig};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -19,6 +21,9 @@ struct CheckpointConfig {
     dim_mults: Vec<usize>,
     #[serde(default)]
     data: String,
+    /// Train the velocity field of a rectified flow instead of a DDPM.
+    #[serde(default)]
+    flow: bool,
 }
 
 #[derive(Clone)]
@@ -41,6 +46,7 @@ struct Options {
     resume: bool,
     seed: u64,
     samples: usize,
+    flow: bool,
 }
 
 impl Default for Options {
@@ -64,6 +70,7 @@ impl Default for Options {
             resume: false,
             seed: 11,
             samples: 16,
+            flow: false,
         }
     }
 }
@@ -105,6 +112,7 @@ impl Options {
                 "--seed" => options.seed = value().parse().expect("seed"),
                 "--resume" => options.resume = true,
                 "--samples" => options.samples = value().parse().expect("samples"),
+                "--flow" => options.flow = true,
                 other => panic!("unknown flag `{other}`"),
             }
             index += 1;
@@ -130,6 +138,7 @@ fn checkpoint_config(options: &Options) -> CheckpointConfig {
         sampling_timesteps: options.sampling_timesteps,
         dim_mults: vec![1, 2, 4, 8],
         data: options.data.clone(),
+        flow: options.flow,
     }
 }
 
@@ -214,20 +223,105 @@ fn build(config: &CheckpointConfig, device: &Device) -> GaussianDiffusion {
     )
 }
 
+/// One training loop for both objectives. The DDPM regresses a discrete-time
+/// target (noise, x0 or v); the rectified flow regresses a continuous velocity.
+#[derive(Clone)]
+enum Trainer {
+    /// Both boxed: the UNet and schedule buffers make either variant large,
+    /// and the enum is stored by value in a few places.
+    Diffusion(Box<GaussianDiffusion>),
+    Flow(Box<RectifiedFlow>),
+}
+
+impl Trainer {
+    fn new(config: &CheckpointConfig, device: &Device) -> Self {
+        if config.flow {
+            Self::Flow(Box::new(RectifiedFlow::new(
+                Unet::new(&unet_config(config), device),
+                config.image_size,
+            )))
+        } else {
+            Self::Diffusion(Box::new(build(config, device)))
+        }
+    }
+
+    fn model(&self) -> &Unet {
+        match self {
+            Self::Diffusion(diffusion) => &diffusion.model,
+            Self::Flow(flow) => &flow.model,
+        }
+    }
+
+    fn set_model(&mut self, model: Unet) {
+        match self {
+            Self::Diffusion(diffusion) => diffusion.model = model,
+            Self::Flow(flow) => flow.model = model,
+        }
+    }
+
+    /// The same objective with another set of weights, for EMA sampling.
+    fn with_model(&self, model: Unet) -> Self {
+        match self {
+            Self::Diffusion(diffusion) => {
+                let mut copy = diffusion.clone();
+                copy.model = model;
+                Self::Diffusion(copy)
+            }
+            Self::Flow(flow) => Self::Flow(Box::new(RectifiedFlow::new(model, flow.image_size))),
+        }
+    }
+
+    fn p_losses(
+        &self,
+        x0: Tensor<4>,
+        rng: &mut diffusion::data::Rng,
+        timesteps: usize,
+        noise: Tensor<4>,
+        device: &Device,
+    ) -> Tensor<1> {
+        match self {
+            Self::Diffusion(diffusion) => {
+                let times: Vec<i64> = (0..x0.dims()[0])
+                    .map(|_| rng.below(timesteps) as i64)
+                    .collect();
+                diffusion.p_losses(x0, &times, noise, device)
+            }
+            Self::Flow(flow) => {
+                let times: Vec<f32> = (0..x0.dims()[0]).map(|_| rng.unit()).collect();
+                flow.p_losses(x0, &times, noise, device)
+            }
+        }
+    }
+
+    fn sample(&self, batch: usize, steps: usize, device: &Device) -> Tensor<4> {
+        match self {
+            Self::Diffusion(diffusion) => diffusion.sample(batch, device),
+            Self::Flow(flow) => flow.sample(batch, steps, device),
+        }
+    }
+}
+
 fn train(options: &Options) {
     let device = options.device().autodiff();
     let mut options = options.clone();
     if options.sampling_timesteps == 0 {
-        options.sampling_timesteps = 50.min(options.timesteps);
+        options.sampling_timesteps = if options.flow {
+            50
+        } else {
+            50.min(options.timesteps)
+        };
     }
-    options.sampling_timesteps = options.sampling_timesteps.min(options.timesteps);
+    if !options.flow {
+        options.sampling_timesteps = options.sampling_timesteps.min(options.timesteps);
+    }
     let options = &options;
     let config = checkpoint_config(options);
-    let mut diffusion = build(&config, &device);
+    let mut trainer = Trainer::new(&config, &device);
     println!(
-        "Unet dim={} params={} ema_decay={}",
+        "{} dim={} params={} ema_decay={}",
+        if config.flow { "RectifiedFlow" } else { "Unet" },
         config.dim,
-        diffusion::test_support::param_count(&diffusion.model),
+        diffusion::test_support::param_count(trainer.model()),
         options.ema_decay
     );
 
@@ -240,11 +334,11 @@ fn train(options: &Options) {
         start = progress["step"].as_u64().unwrap_or(0) as usize + 1;
         let record = ModuleRecord::load(format!("{}/model-live", options.out))
             .expect("load the resume model");
-        diffusion.model = diffusion.model.load_record(record);
+        trainer.set_model(trainer.model().clone().load_record(record));
         println!("resumed at step {}", start - 1);
     }
 
-    let mut ema = Ema::new(&diffusion.model, options.ema_decay);
+    let mut ema = Ema::new(trainer.model(), options.ema_decay);
     let mut optimizer = AdamWConfig::new().init();
     let raw = if options.data.is_empty() {
         None
@@ -271,21 +365,18 @@ fn train(options: &Options) {
                 diffusion::data::batch(options.batch, options.image_size, rng.next_u64(), &device)
             }
         };
-        let times: Vec<i64> = (0..options.batch)
-            .map(|_| rng.below(options.timesteps) as i64)
-            .collect();
         let noise = Tensor::<4>::random(
             [options.batch, 3, options.image_size, options.image_size],
             burn::tensor::Distribution::Normal(0.0, 1.0),
             &device,
         );
 
-        let loss = diffusion.p_losses(x0, &times, noise, &device);
+        let loss = trainer.p_losses(x0, &mut rng, options.timesteps, noise, &device);
         let value = loss.clone().into_scalar::<f32>();
-        let grads = GradientsParams::from_grads(loss.backward(), &diffusion.model);
+        let grads = GradientsParams::from_grads(loss.backward(), trainer.model());
 
         if !options.dump.is_empty() && step == options.steps {
-            let dump = diffusion::inspect::dump(&diffusion.model, Some(&grads));
+            let dump = diffusion::inspect::dump(trainer.model(), Some(&grads));
             if let Some(parent) = std::path::Path::new(&options.dump).parent() {
                 std::fs::create_dir_all(parent).ok();
             }
@@ -302,8 +393,9 @@ fn train(options: &Options) {
             );
         }
 
-        diffusion.model = optimizer.step(2e-4, diffusion.model, grads);
-        ema.update(&diffusion.model);
+        let updated = optimizer.step(2e-4, trainer.model().clone(), grads);
+        trainer.set_model(updated);
+        ema.update(trainer.model());
 
         if step == 1 || step % 100 == 0 {
             let now = std::time::Instant::now();
@@ -316,8 +408,8 @@ fn train(options: &Options) {
         // Periodic checkpoint: live weights for resume, EMA weights and a grid
         // for watching progress.
         if step % options.checkpoint_every == 0 && step < options.steps {
-            diffusion
-                .model
+            trainer
+                .model()
                 .clone()
                 .valid()
                 .into_record()
@@ -329,9 +421,8 @@ fn train(options: &Options) {
                 .into_record()
                 .save(format!("{}/model", options.out))
                 .expect("save ema");
-            let mut sampler = diffusion.clone();
-            sampler.model = ema.model.valid();
-            let grid = sampler.sample(16, &device);
+            let sampler = trainer.with_model(ema.model.valid());
+            let grid = sampler.sample(16, options.sampling_timesteps, &device);
             save_samples(grid, &format!("{}/grid-{step:06}.png", options.out));
             std::fs::write(
                 format!("{}/config.json", options.out),
@@ -367,8 +458,8 @@ fn train(options: &Options) {
     .expect("write progress");
 
     // Final: EMA weights for sampling, live weights kept for reference.
-    diffusion
-        .model
+    trainer
+        .model()
         .clone()
         .valid()
         .into_record()
@@ -387,9 +478,8 @@ fn train(options: &Options) {
     .expect("write the config");
 
     let started = std::time::Instant::now();
-    let mut sampled = diffusion.clone();
-    sampled.model = ema.model.valid();
-    let images = sampled.sample(options.samples, &device);
+    let sampled = trainer.with_model(ema.model.valid());
+    let images = sampled.sample(options.samples, options.sampling_timesteps, &device);
     let eval = if options.eval_data.is_empty() {
         &options.data
     } else {
@@ -443,28 +533,37 @@ fn sample(options: &Options) {
     } else {
         config.sampling_timesteps
     };
-    // The model defines the chain: a DDPM request longer than the trained
-    // timesteps cannot be honoured, and reporting the request would be a lie.
-    let sampling = requested.min(config.timesteps);
-    if requested > sampling {
+    // The DDPM chain length is fixed by the model; the flow's ODE can use any
+    // number of steps, so a request below the trained timesteps is meaningful
+    // there and is not clamped.
+    let sampling = if config.flow {
+        requested.max(2)
+    } else {
+        requested.min(config.timesteps)
+    };
+    if !config.flow && requested > sampling {
         println!(
             "note: model has {} timesteps; running the full {sampling}-step DDPM chain",
             config.timesteps
         );
     }
-    let diffusion = GaussianDiffusion::new(
-        model,
-        config.image_size,
-        config.timesteps,
-        Some(sampling),
-        Objective::PredV,
-        BetaSchedule::Sigmoid,
-        false,
-        5.0,
-    );
+    let trainer = if config.flow {
+        Trainer::Flow(Box::new(RectifiedFlow::new(model, config.image_size)))
+    } else {
+        Trainer::Diffusion(Box::new(GaussianDiffusion::new(
+            model,
+            config.image_size,
+            config.timesteps,
+            Some(sampling),
+            Objective::PredV,
+            BetaSchedule::Sigmoid,
+            false,
+            5.0,
+        )))
+    };
 
     let started = std::time::Instant::now();
-    let images = diffusion.sample(options.samples, &device);
+    let images = trainer.sample(options.samples, sampling, &device);
     // A published checkpoint records the training file it was fitted on, which
     // will not exist on another machine. Sampling must still work; only the
     // nearest-training distance needs the data.

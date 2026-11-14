@@ -56,12 +56,76 @@ distance metric; the port matches it to the digit on parameters and is the only
 one of the two that can be tested against the other. Its flower run is the part
 the reference has not been asked to do.
 
+## Rectified flow
+
+A second objective on the same UNet, ported from
+[`lucidrains/rectified-flow-pytorch`](https://github.com/lucidrains/rectified-flow-pytorch).
+Instead of learning to denoise a discrete schedule, the network learns a velocity
+field that transports Gaussian noise to data along straight paths:
+
+```text
+x_t = (1 - t) * noise + t * data      t in [0, 1]
+v   = data - noise                    the target
+```
+
+Sampling integrates `dx/dt = v(x, t)` from `t = 0` to `t = 1`. The reference uses
+`torchdiffeq.odeint` with the midpoint method; this port implements the same
+fixed-step midpoint rule, two network evaluations per step.
+
+**It is the best result in this repository.** The same `dim 24`, 64x64 UNet and
+the same 13,000 training steps:
+
+| Model | Sampler | Steps | pixel-FID | nearest L1 | gradient ratio | colour distance |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| DDPM, `dim 24` | DDPM | 200 | 4.761 +- 0.346 | 0.315 | 0.966 | 0.145 |
+| DDPM, `dim 24` | DDIM | 50 | 5.131 +- 0.233 | 0.313 | 0.939 | 0.175 |
+| **rectified flow** | midpoint | **20** | **3.170 +- 0.074** | 0.334 | 1.063 | 0.101 |
+| rectified flow | midpoint | 10 | 3.264 | 0.333 | 1.043 | 0.109 |
+| rectified flow | midpoint | 50 | 3.224 | 0.335 | 1.073 | 0.094 |
+| real images vs held out (floor) | — | — | 2.957 +- 0.234 | 0.329 | 1.000 | 0.117 |
+
+512 samples per draw, three draws where a spread is shown, EMA weights. **This is
+the first model here to beat the 4.0 target**, 1.80 below DDPM's mean and 0.21
+above the real-image floor. Ten steps are enough to reach 3.26; twenty are the
+best point; fifty buy nothing.
+
+![Real flowers and rectified flow at 10, 20 and 50 steps](../docs/examples-flow.webp)
+
+```sh
+cargo run -p diffusion --release -- train --flow --backend wgpu \
+    --data /tmp/flowers/train64.bin --image-size 64 --dim 24 --steps 13000 \
+    --batch 16 --ema-decay 0.999 --out /tmp/flow
+cargo run -p diffusion --release -- sample --backend wgpu \
+    --ckpt /tmp/flow --samples 16 --sampling-steps 20
+```
+
+The weights are in
+[`models/flowers-64-flow-dim24-13k`](../models/flowers-64-flow-dim24-13k).
+
+### What is ported, and what is not
+
+| Reference | Here |
+| --- | --- |
+| `noise.lerp(data, t)`, target `data - noise`, plain MSE | `RectifiedFlow::p_losses` |
+| `odeint(..., method='midpoint')` over `linspace(0, 1, steps)` | `RectifiedFlow::sample`, fixed-step midpoint |
+| continuous time conditioning (times in `[0, 1]`) | `Unet::forward_continuous` and `SinusoidalPosEmb::forward_continuous` |
+
+Not ported, because they are optional research branches rather than the base
+algorithm: reflow (the second rectification pass), consistency flow matching,
+the LPIPS and pseudo-Huber losses, the mean/variance head, immiscible pairing and
+the Welford normaliser.
+
+Three tests pin the pieces: the interpolation hits noise at `t = 0` and data at
+`t = 1` with the midpoint between them, the loss is finite and non-negative, and
+sampling is deterministic when the device is seeded.
+
 ## What is ported
 
 | Reference | Here |
 | --- | --- |
 | `Unet` with `dim_mults`, RMSNorm, sinusoidal position embedding, `ResnetBlock` with time-conditioned scale/shift, linear and full attention with memory keys/values, pixel-unshuffle downsample, nearest upsample | `src/unet.rs` |
 | `GaussianDiffusion`: linear, cosine and sigmoid beta schedules, `pred_noise` / `pred_x0` / `pred_v`, `q_sample`, `p_losses`, min-SNR loss weighting, DDPM `p_sample`, DDIM sampling | `src/diffusion.rs` |
+| [`rectified-flow-pytorch`](https://github.com/lucidrains/rectified-flow-pytorch): linear interpolation, velocity target, midpoint ODE sampling | `src/flow.rs`, selected with `--flow` |
 | `ema_pytorch` in the trainer | `src/ema.rs` |
 | `Dataset` over a folder of images | `src/data.rs`: synthetic shapes, plus a flat-file loader with a held-out split |
 
@@ -367,6 +431,11 @@ Sampler choice is itself a lever: at 7,000 steps DDPM was slightly worse than
 DDIM (7.30 against 7.01); with 5.28 M parameters and 13,000 steps it is the best
 thing the model does.
 
+**The objective is a bigger lever than the sampler.** The same UNet trained as a
+rectified flow reaches **3.170 +- 0.074** in 20 ODE steps — below the 4.0 target
+and 0.21 above the floor. That is what actually met the goal; see
+[Rectified flow](#rectified-flow).
+
 What blocks it, in order of evidence:
 
 - **Capacity is not the wall, but it is a real lever.** `dim 24` at 13k beats
@@ -420,6 +489,16 @@ python3 scripts/ddpm_floor.py --train /tmp/flowers/train64.bin \
     --held /tmp/flowers/held64.bin --size 64
 python3 scripts/plot_ddpm_curve.py --stage stage-24000/summary.json \
     --stage stage-48000/summary.json --floor floor.json --out curve.png
+```
+
+Rectified flow, same data and same UNet:
+
+```sh
+cargo run -p diffusion --release -- train --flow --backend wgpu \
+    --data /tmp/flowers/train64.bin --image-size 64 --dim 24 --steps 13000 \
+    --batch 16 --ema-decay 0.999 --out /tmp/flow
+cargo run -p diffusion --release -- sample --backend wgpu \
+    --ckpt /tmp/flow --samples 16 --sampling-steps 20
 ```
 
 `--resume` restarts from the newest checkpoint. It restores the weights and the

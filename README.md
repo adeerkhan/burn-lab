@@ -5,7 +5,7 @@
   ![Rust](https://img.shields.io/badge/Rust-1.95%2B-f15a24?style=flat-square&logo=rust&logoColor=white)
   ![Burn](https://img.shields.io/badge/Burn-0.23.0--pre.2-f15a24?style=flat-square)
   ![License](https://img.shields.io/badge/License-MIT-f15a24?style=flat-square)
-  ![Tests](https://img.shields.io/badge/tests-112%20passing-f15a24?style=flat-square)
+  ![Tests](https://img.shields.io/badge/tests-115%20passing-f15a24?style=flat-square)
 
   <p><b>A 25.7M-parameter language model — hybrid attention, sparse mixture of experts, four residual
   streams — pretrained from scratch and post-trained with executable-reward RL, all in Burn.</b></p>
@@ -261,9 +261,11 @@ Burn's dashboard only renders when stdout is a terminal, so
 ## A second workload: diffusion
 
 `diffusion/` ports [`lucidrains/denoising-diffusion-pytorch`](https://github.com/lucidrains/denoising-diffusion-pytorch)
-— the UNet, the three beta schedules, DDPM and DDIM sampling, and the EMA. It is the counterpart to
-`glm53`: where that exercises attention and MoE over text, this exercises convolution, residual
-blocks and attention over a spatial grid.
+(the UNet, three beta schedules, DDPM and DDIM, the EMA) and
+[`lucidrains/rectified-flow-pytorch`](https://github.com/lucidrains/rectified-flow-pytorch) (a velocity
+field integrated with the midpoint rule). It is the counterpart to `glm53`: where that exercises
+attention and MoE over text, this exercises convolution, residual blocks and attention over a spatial
+grid.
 
 It trains on real photographs, not toys: the TensorFlow `flower_photos` set, 3,303 train and 367
 held out, at 64×64.
@@ -274,19 +276,27 @@ held out, at 64×64.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | DDIM | 20 | 7.262 | 0.286 | 0.818 | 0.263 |
 | DDIM | 50 | 5.131 ± 0.233 | 0.313 | 0.939 | 0.175 |
-| **DDPM** | **200** | **4.761 ± 0.346** | 0.315 | 0.966 | 0.145 |
+| DDPM | 200 | 4.761 ± 0.346 | 0.315 | 0.966 | 0.145 |
+| **rectified flow** | **20** | **3.170 ± 0.074** | 0.334 | 1.063 | 0.101 |
 | real images vs held out (floor) | — | 2.957 ± 0.234 | 0.329 | 1.000 | 0.117 |
+
+<img src="docs/examples-flow.webp" alt="Real flowers, then rectified flow at 10, 20 and 50 steps" width="100%"/>
 
 512 samples per draw, three draws per sampler where a spread is shown, EMA weights, 8×8×3 pooled pixels. The full study — the estimator's floor, the
 FID-versus-steps curve, the cap-capacity experiment and the loader fix that preceded it — is in
 [`diffusion/README.md`](diffusion/README.md), and the weights that produced these rows are in
 [`models/flowers-64-dim24-13k`](models/flowers-64-dim24-13k).
 
-Both samplers run on **one** checkpoint: DDIM and DDPM are two trajectories, not two models.
+DDIM and DDPM run on **one** checkpoint — two trajectories, not two models. Rectified flow is a
+second checkpoint with the same architecture, and it is the one that beats the 4.0 target: 20 ODE
+steps score 3.170 ± 0.074, 0.21 above the real-image floor, against DDPM's 4.761.
 
 ```sh
 cargo run -p diffusion --release -- sample --backend wgpu \
   --ckpt models/flowers-64-dim24-13k --samples 16 --sampling-steps 200
+
+cargo run -p diffusion --release -- sample --backend wgpu \
+  --ckpt models/flowers-64-flow-dim24-13k --samples 16 --sampling-steps 20
 ```
 
 Its schedules and `q_sample` are checked against values extracted from the reference source, and the

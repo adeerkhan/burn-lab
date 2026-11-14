@@ -56,6 +56,21 @@ impl SinusoidalPosEmb {
 
     /// `[batch, dim]` for the given integer timesteps.
     pub fn forward(&self, times: &[i64], device: &Device) -> Tensor<2> {
+        self.embed(
+            &times.iter().map(|time| *time as f64).collect::<Vec<_>>(),
+            device,
+        )
+    }
+
+    /// `[batch, dim]` for continuous times in `[0, 1]`, as rectified flow uses.
+    pub fn forward_continuous(&self, times: &[f32], device: &Device) -> Tensor<2> {
+        self.embed(
+            &times.iter().map(|time| *time as f64).collect::<Vec<_>>(),
+            device,
+        )
+    }
+
+    fn embed(&self, times: &[f64], device: &Device) -> Tensor<2> {
         let half = self.dim / 2;
         let log_theta = self.theta.ln();
         let frequencies: Vec<f64> = (0..half)
@@ -65,7 +80,7 @@ impl SinusoidalPosEmb {
         let batch = times.len();
         let mut data = Vec::with_capacity(batch * self.dim);
         for time in times {
-            let values: Vec<f64> = frequencies.iter().map(|f| *time as f64 * f).collect();
+            let values: Vec<f64> = frequencies.iter().map(|f| *time * f).collect();
             for value in &values {
                 data.push(value.sin() as f32);
             }
@@ -653,6 +668,17 @@ impl Unet {
 
     pub fn forward(&self, x: Tensor<4>, times: &[i64]) -> Tensor<4> {
         let position = self.position.forward(times, &x.device());
+        self.forward_with_embedding(x, position)
+    }
+
+    /// The reference's continuous-time path: times are in `[0, 1]`, as used by
+    /// rectified flow rather than the discrete DDPM steps.
+    pub fn forward_continuous(&self, x: Tensor<4>, times: &[f32]) -> Tensor<4> {
+        let position = self.position.forward_continuous(times, &x.device());
+        self.forward_with_embedding(x, position)
+    }
+
+    fn forward_with_embedding(&self, x: Tensor<4>, position: Tensor<2>) -> Tensor<4> {
         let embedding = burn::tensor::activation::gelu(self.time_mlp_linear1.forward(position));
         let embedding = self.time_mlp_linear2.forward(embedding);
 
