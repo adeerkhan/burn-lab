@@ -8,18 +8,19 @@ model. Its point is **one-step sampling**.
 | --- | --- |
 | Backbone | UNet, `dim 24`, `dim_mults (1,2,4,8)`, 5,277,891 parameters |
 | Objective | rectified flow, reflow pass |
-| Training | 6,000 steps, batch 16, 2,048 cached pairs at 20 ODE steps, 1,077.5 s |
-| Checkpoint | `model.bpk`, 21 MB, `sha256 433e2a4676c7fc20566ba068c4464bcf15b8464e7151f399b5902325c9c27856` |
+| Training | 6,000 steps, batch 16, 8,192 cached pairs at 20 ODE steps |
+| Checkpoint | `model.bpk`, 21 MB, `sha256 c6993557e942045fafae44030ea6d84ba9f382d4e8f0c5bf1f1665e2984348cb` |
 
 Held-out pixel-FID, 512 samples per draw:
 
 | ODE steps | 1 | 2 | 4 | 10 | 20 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | base flow | 24.967 | 11.237 | — | 3.264 | **3.170** |
-| **reflow** | **4.418** | **4.360** | **4.191** | 3.625 | 3.745 |
+| **reflow, 8k pairs** | **4.079** | **4.210** | **3.891** | 3.760 | 3.852 |
 
-One step is 5.6x better than the base model's one step; twenty steps are slightly
-worse, the trade the paper describes.
+One step is 6.1x better than the base model's one step; twenty steps are slightly
+worse, the trade the paper describes. A 2,048-pair cache scored 4.418 at one
+step, so the larger cache helps the cheap end only.
 
 ## Sample from it
 

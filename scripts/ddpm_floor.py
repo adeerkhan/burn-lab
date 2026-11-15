@@ -27,11 +27,12 @@ def main() -> None:
     parser.add_argument("--size", type=int, required=True)
     parser.add_argument("--draws", type=int, default=5)
     parser.add_argument("--subset", type=int, default=367)
+    parser.add_argument("--grid", type=int, default=8)
     parser.add_argument("--json", type=Path)
     args = parser.parse_args()
 
-    train = pool(load_u8(args.train, args.size), 8)
-    held = pool(load_u8(args.held, args.size), 8)
+    train = pool(load_u8(args.train, args.size), args.grid)
+    held = pool(load_u8(args.held, args.size), args.grid)
     print(f"train {train.shape}, held {held.shape}")
 
     # A model trained on all 3,303 images is scored against the held-out set, so
@@ -53,6 +54,7 @@ def main() -> None:
         "floor_colour_distance": colour_distance(train, held),
         "samples": {"train": int(len(train)), "held": int(len(held)), "subset": args.subset},
         "dims": int(train.shape[1]),
+        "grid": args.grid,
     }
     print(json.dumps(result, indent=2))
     if args.json:

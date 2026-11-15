@@ -127,6 +127,43 @@ and DDPM 0.97, where 1.00 is a real photograph's texture. The samples are not
 memorised training images — their nearest-training L1 (0.334) is *higher* than
 the distance a real held-out image scores (0.329).
 
+### 128x128, and what the metric cannot see
+
+Same recipe at 128x128: `dim 16`, batch 8, 14,000 steps — the same 112,000 images
+the 64x64 7k run saw — 3,894 s.
+
+| Resolution | pixel-FID | nearest L1 | gradient ratio | colour distance |
+| --- | ---: | ---: | ---: | ---: |
+| 64x64, 7k (112k images) | **6.541** | 0.307 | 0.984 | 0.219 |
+| 128x128, 14k (112k images) | 6.450 | 0.358 | 1.240 | 0.159 |
+
+![Real 128x128, flow 128x128](../docs/quality-128.webp)
+
+The 128 model is level on the coarse metric and visibly more detailed, but its
+texture is harsher (gradient ratio 1.24 against 0.98). More importantly, **the
+estimator cannot see the difference it was supposed to buy**: pooling 128x128 to
+8x8 and 64x64 to 8x8 produces the same 192 coarse statistics, and the real-image
+floor is identical at both resolutions (2.945 +- 0.234 against 2.957 +- 0.234).
+At a fixed image budget, resolution costs capacity and steps; this metric will
+never reward the detail.
+
+### Inception FID, for calibration
+
+The numbers above are pixel-space. To relate them to the literature, the flow
+model was scored in Inception-v3 pool3 space (`scripts/inception_fid.py`), 2,304
+samples against the 3,303 training images:
+
+| Feature space | Model | Real held-out vs train (floor) |
+| --- | ---: | ---: |
+| Inception 2048-d | 186.86 | not computable (367 held-out < 2048) |
+| Inception 256-d PCA | 150.55 | **19.23** |
+
+In a feature space that sees detail, the model is **7.8x the floor**; in the 8x8
+pixel space it is **1.07x**. Both are true statements about the same samples: the
+pixel estimator measures coarse colour and layout, which the model has learned,
+and stops there. **3.170 is not Inception FID 3.170**, and nothing here should be
+compared with a paper's FID.
+
 ### Reflow: one-step sampling
 
 Reflow is the paper's second rectification pass. The model is retrained on
@@ -166,10 +203,44 @@ as everything else here.
 
 ![Real flowers, then reflow at 1, 4 and 20 steps](../docs/quality-reflow.webp)
 
-Two caveats. The cache is 2,048 pairs, reused about 47 times each over the run;
-a larger cache or fresh pairs would likely close the 20-step gap. And 6,000
-steps is short for a second training pass — the reference trains reflow for tens
-of thousands.
+**A larger cache helps the cheap end only.** Doubling the cache to 8,192 pairs
+and repeating the 6,000 steps:
+
+| ODE steps | 1 | 2 | 4 | 10 | 20 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| reflow, 2,048 pairs | 4.418 | 4.360 | 4.191 | 3.625 | 3.745 |
+| reflow, 8,192 pairs | **4.079** | **4.210** | **3.891** | 3.760 | 3.852 |
+
+One step improves by 0.34 and four steps by 0.30; ten and twenty do not improve
+at all, and the gap to the base model's 3.170 at twenty steps survives. So the
+cache was not what limited the asymptotic quality: the straightening itself
+costs that detail. Six thousand steps is also short for a second pass — the
+reference trains reflow for tens of thousands.
+
+### Consistency flow matching: a negative result
+
+The other published route to few-step sampling is consistency flow matching: the
+model is trained to predict the same flow at `t` and at `t + delta`, with an EMA
+as the target. The implementation here follows the equations — a data-match term
+on the predicted `x_0` and a velocity-match term against the shadow model, weight
+`1e-5` for the velocity, `delta = 1e-3` — using the training EMA (decay 0.999)
+rather than the reference's dedicated 0.9999 model.
+
+Trained at the same configuration as the flow model (64x64, `dim 24`, 13,000
+steps):
+
+| ODE steps | 1 | 2 | 4 | 10 | 20 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| base flow | 24.967 | 11.237 | — | 3.264 | **3.170** |
+| reflow, 8k pairs | **4.079** | **4.210** | **3.891** | 3.760 | 3.852 |
+| consistency | 26.059 | 11.237 | 5.721 | 3.520 | 3.714 |
+
+**Consistency matching bought nothing here.** At one step it is as bad as the
+base model, and the asymptotic end is unchanged. Two explanations, both
+plausible and neither tested: the shared EMA is far noisier than the reference's
+dedicated 0.9999 shadow, and the reference relies on a training schedule that
+shifts `delta` and the target rather than a constant 1e-3. Reflow, which changes
+the data instead of the loss, worked at the first attempt.
 
 ### What is ported, and what is not
 
@@ -216,6 +287,12 @@ data, seed and 13,000 steps as the UNet model (3,231.9 s).
 | --- | ---: | ---: | ---: | ---: |
 | UNet, `dim 24` | 5.28 M | **3.170 +- 0.074** | 1.063 | 2.60 s / 128 |
 | ViT, `dim 256` | 20.34 M | 7.666 +- 0.279 | 1.479 | **1.72 s / 128** |
+
+At 128x128 with patch 16 (again 64 tokens), the same 13,000 steps produce
+something worse still: **pixel-FID 14.516**, gradient ratio 9.64, nearest L1
+0.743, and samples that are 16x16 blocky noise. Larger patches concentrate 256
+pixels into one token, which is more than a 20M-parameter model can fit from
+3,303 images in 13,000 steps.
 
 The ViT is clearly worse at this budget, and faster per sample: attention over
 64 tokens is cheap, so it draws 128 images in 1.72 s against the UNet's 2.60 s.

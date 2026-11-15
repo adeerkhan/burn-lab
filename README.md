@@ -1,531 +1,197 @@
+# burn-lab
+
 <div align="center">
-  <img src="docs/hero.webp" alt="burn-lab: GLM-5.3-Flash from scratch, in Burn" width="100%"/>
+  <img src="docs/hero.webp" alt="burn-lab" width="100%"/>
   <br/><br/>
 
   ![Rust](https://img.shields.io/badge/Rust-1.95%2B-f15a24?style=flat-square&logo=rust&logoColor=white)
   ![Burn](https://img.shields.io/badge/Burn-0.23.0--pre.2-f15a24?style=flat-square)
   ![License](https://img.shields.io/badge/License-MIT-f15a24?style=flat-square)
-  ![Tests](https://img.shields.io/badge/tests-115%20passing-f15a24?style=flat-square)
-
-  <p><b>A 25.7M-parameter language model — hybrid attention, sparse mixture of experts, four residual
-  streams — pretrained from scratch and post-trained with executable-reward RL, all in Burn.</b></p>
+  ![Tests](https://img.shields.io/badge/tests-122%20passing-f15a24?style=flat-square)
 </div>
 
 ---
 
 ## What this is
 
-A port of [`vukrosic/glm-5.3-flash-from-scratch`](https://github.com/vukrosic/glm-5.3-flash-from-scratch)
-to [Burn](https://github.com/tracel-ai/burn): a GLM-5.3-Flash-inspired language model trained from
-random initialization on a synthetic Python corpus, then fine-tuned with RLOO against executable
-unit-test rewards.
+Two real workloads ported to [Burn](https://github.com/tracel-ai/burn), plus the MNIST lab it started
+from:
 
-The goal is not to beat the reference. It is to take a real language-model workload — the kind that
-usually means PyTorch — and find out exactly where Burn holds up and where it does not. The
-[port notes](#the-port) record every deviation, and the [findings](#what-we-learned-about-burn)
-record every rough edge we hit.
+- **`diffusion/`** — DDPM, DDIM and rectified flow on the TensorFlow `flower_photos` set, with a
+  pixel-space Fréchet metric, a measured real-image floor, and saved checkpoints.
+- **`glm53/`** — a 25.7M-parameter GLM-5.3-Flash port trained from scratch and post-trained with
+  executable-reward RL.
+- **`src/`** — the Burn Book's MNIST workflow, with a live dashboard.
 
-The workspace also carries `burn-lab`, the original MNIST lab from the Burn Book's basic workflow,
-which is where this started.
+The diffusion work is the most complete: every number below is a held-out measurement, and the
+failures are recorded beside the wins.
 
-## Results
+## Diffusion results
 
-Every number below is measured from runs in this repository. See [`glm53/README.md`](glm53/README.md)
-for the full tables, commands and seeds.
+<p align="center"><img src="docs/examples-flow.webp" alt="Real flowers, DDIM, DDPM and rectified flow" width="100%"/></p>
 
-<img src="docs/loss.webp" alt="Pretraining loss, 5.09 to 0.211 over 400 steps" width="100%"/>
+64×64 flowers, 3,303 training images and 367 held out, 512 samples per draw, EMA weights, pixel-FID
+at 8×8×3 pooling. The real-image floor on the same estimator is **2.957 ± 0.234** — a perfect model
+cannot score zero, and 4.0 was the target this project set itself.
 
-Pretraining takes **155 s** on an RTX 5060 through wgpu/Vulkan: 400 steps, batch 16 × 128 tokens,
-AdamW at 3e-4. Loss falls from 5.09 — barely above `ln(260) = 5.56`, a uniform guess — to **0.211**.
+| Model | Sampler | Steps | pixel-FID | nearest L1 | grad ratio |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 32×32 `dim 16`, 4k (baseline) | DDIM | 50 | 9.224 | 0.319 | 1.353 |
+| 64×64 `dim 16`, 7k | DDIM | 50 | 6.541 | 0.307 | 0.984 |
+| 64×64 `dim 16`, 24k | DDIM | 50 | 5.956 | 0.302 | 0.947 |
+| 64×64 `dim 16`, 48k | DDIM | 50 | 7.341 | 0.297 | 0.979 |
+| 64×64 `dim 24`, 13k | DDIM | 50 | 5.131 | 0.313 | 0.939 |
+| 64×64 `dim 24`, 13k | DDPM | 200 | 4.761 | 0.315 | 0.966 |
+| 64×64 `dim 24`, 13k | **flow** | **20** | **3.170** | 0.334 | 1.063 |
+| 128×128 `dim 16`, 14k | flow | 20 | 6.450 | 0.358 | 1.240 |
+| 64×64 `dim 24`, reflow | flow | 1 | **4.079** | 0.331 | 1.056 |
+| 64×64 ViT `dim 256`, 13k | flow | 20 | 7.666 | 0.345 | 1.479 |
+| 128×128 ViT `dim 256`, 13k | flow | 20 | 14.516 | 0.743 | 9.641 |
+| 64×64 `dim 24`, consistency | flow | 1 | 26.059 | — | — |
+| real images vs held out | — | — | 2.957 ± 0.234 | 0.329 | 1.000 |
 
-<img src="docs/checkpoints.webp" alt="Dev pass@1 by checkpoint" width="100%"/>
+Three points carry the study:
 
-Dev pass@1 saturates: 3/32 at step 100, 29/32 at 200, 32/32 at 400. The reference reports the same
-saturation on its own benchmark, which is why both projects RL from an early checkpoint rather than
-the final one.
+- **The objective is the biggest lever.** The same UNet, data, seed and 13,000 steps: DDPM 4.761,
+  rectified flow **3.170**. That is a larger effect than any sampler or step-count change.
+- **Steps are not monotone.** 7k → 24k improves by 0.59; 24k → 48k *harms* by 1.38 while the training
+  loss keeps falling.
+- **Reflow buys the cheap end.** One Euler step goes from 24.967 to **4.079**, a 6.1× improvement, at
+  a cost of 0.7 at twenty steps.
+- **Resolution costs compute, and the metric cannot see it.** The same 112k-image budget at 128×128
+  scores 6.450, worse than 64×64's 3.170 on the coarse estimator — whose real-image floor is identical
+  at both resolutions (2.945 vs 2.957), because 8×8 pooling discards detail.
 
-<img src="docs/rl.webp" alt="RLOO before and after, dev and confirm" width="100%"/>
+<p align="center"><img src="docs/quality-reflow.webp" alt="Real flowers, then reflow at 1, 4 and 20 steps" width="100%"/></p>
 
-RLOO moves the policy **one task better on the selection split and two tasks worse on the held-out
-split**, at both pass@1 and pass@8:
+### The models
 
-| Metric | pre-RL | post-RL |
+| Checkpoint | What it is | Size |
 | --- | --- | --- |
-| dev pass@1 | 0.906 (29/32) | **0.938 (30/32)** |
-| dev pass@8 | 0.875 (28/32) | 0.875 (28/32) |
-| confirm pass@1 | **0.906 (29/32)** | 0.844 (27/32) |
-| confirm pass@8 | **0.875 (28/32)** | 0.813 (26/32) |
+| [`models/flowers-64-dim24-13k`](models/flowers-64-dim24-13k) | the 64×64 DDPM/DDIM model, `dim 24`, 13k steps | 21 MB |
+| [`models/flowers-64-flow-dim24-13k`](models/flowers-64-flow-dim24-13k) | same UNet, rectified-flow objective, FID 3.170 | 21 MB |
+| [`models/flowers-64-reflow-dim24-6k`](models/flowers-64-reflow-dim24-6k) | reflow pass, one-step sampling | 21 MB |
 
-<img src="docs/comparison.webp" alt="Pretraining, RL progress and the confirmation split side by side" width="100%"/>
+Each has a card with its checksum, metrics and a one-line sampling command.
 
-The three panels mirror the reference's own main-results chart: pretraining learns code, RL raises the
-on-policy rollout rate, and the untouched confirmation split decides whether any of it generalised.
-The shape reproduces. The outcome does not.
-
-<img src="docs/families.webp" alt="Exact sampled completions per family before and after RL" width="100%"/>
-
-Per family on confirm, RL moved two families backwards and one forwards: `increment` 94% → 73%,
-`double` 92% → 84%, `absolute` 81% → 95%, everything else flat. Note that RL trained on **all eight**
-families here, not the three the reference uses — so this is interference between families the reward
-touched, not transfer to families it did not.
-
-<img src="docs/generation.webp" alt="The same prompt before and after RL, one gain and one loss" width="100%"/>
-
-The clearest single illustration. On dev, RL repaired a syntax error (`text[:::-1]` → `text[::-1]`).
-On confirm, it broke working code (`text[::-1]` → `text[:-1]`). Same model, same verifier, opposite
-directions.
-
-### Vision and the miniature studies
-
-![Both image paths and the 25M pilot](docs/vision.webp)
-
-The vision path is ported module for module. Over five seeds the **direct-patch
-baseline beats the faithful encoder** in every one: **92.7% ± 5.6** (95% CI 88.4-97.3)
-against **55.6% ± 17.6** (42.0-69.0) at width 24, and **48.7% ± 16.1** (34.5-59.4) at
-width 48. Running the reference implementation itself under the same seed reproduces
-our faithful tower to the example (see `docs/data/vision-comparison.json`). The
-faithful tower's sd is three times the baseline's, widening it makes it worse, and a
-single seed cannot rank the architectures. The 25.7M pilot learns the digit task through a saturated coding
-model but needs 200 steps, not the reference's 40.
-
-![Data diversity and curriculum ordering](docs/experiments.webp)
-
-Two matched studies over an arithmetic corpus, **ten paired seeds** each, with
-initialization seeded per arm. Results after the fix:
-
-- **Diversity: no confirmable effect.** Every arm beats 8 structures by +0.7 to +2.5
-  points, but no comparison survives Holm correction (best is 64 vs 8 at +2.49, Holm
-  p = 0.24). An earlier +3.8 points at Holm p = 0.008 did not reproduce — it came from
-  unseeded initialization, and the init variance was larger than the effect.
-- **Ordering: blocked loses, and that is robust.** Presenting the same examples in
-  blocks costs **-11.91 points** against interleaving (Holm p = 0.0039), stable across
-  every run. Curriculum ordering and interleaving are indistinguishable (Holm p = 0.74).
-- **The reference's own studies agree.** At matched settings (200 steps, seeds 11/22/33)
-  their blocked arm scores 49.40% against our 48.15%, and their diversity arms sit within
-  about a point of ours. The ordering effect replicates across implementations.
-- **The two factors do not interact.** Crossing ordering with 8 versus 48 structures
-  gives a difference in differences of +1.8 points (95% CI -0.7 to +4.3, p = 0.23):
-  blocking costs 18.2 points at 8 structures and 16.4 at 48.
-- **The studies carry a one-point noise floor.** `wgpu` is not bit-reproducible: the
-  same arm and seed, three times, gave 0.5622, 0.5707 and 0.5826. `flex` is exact but
-  needs hours at this configuration, so it is used for vision and reference checks and
-  the study CIs, not the point estimates, carry the weight.
-
-Exact-expression accuracy was 0% throughout: this measures partial next-byte learning,
-not program generation.
-
-## RL: the band, and the screen inside it
-
-The earlier screen ran at step 200 and every arm tied — but dev was already 29/32, so
-almost every rollout passed and the advantage was noise. Measuring the reward signal
-first (sampled pass@16, 512 rollouts per checkpoint) puts the usable band much earlier:
-
-| Step | 100 | 110 | 120 | 130 | **140** | 150 | 160 | 180 | 200 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Exact rollouts | 3.3% | 2.1% | 10.7% | 16.8% | **33.6%** | 38.9% | 67.6% | 84.6% | 86.7% |
-
-Re-running the eight arms at step 140 — where the baseline sees signal in 7 of 16 groups
-and half its rollouts are exactly correct — gives **every arm Holm p = 1.00, largest
-difference two of 32 tasks**. So the earlier null was placement, and this one is not:
-with a real signal present, none of RLOO's design choices move greedy dev accuracy at
-this scale. With 32 dev tasks, exact McNemar needs six net discordant tasks for
-p < 0.05. What this rules out is a design-choice effect large enough to matter at this
-scale, with a real reward signal present. It does not rule out that RLOO helps from a
-much weaker policy — the reference's starting point solved about a quarter of dev
-greedily, and no point in our band has that shape.
-
-### Why our result differs from the reference's
-
-The reference reports confirm greedy going **0/24 → 16/24**. Ours went 29/32 → 27/32. We ran two
-replications to find out why, and both are informative.
-
-**Their exact configuration, from our weakest checkpoint.** 96 groups x 16 rollouts, T=0.35, the same
-three families, `last-block-head`, from step 100. On confirm our step 100 scores **0/32 — the same
-floor as their 0/24**, so the starting condition does match. But only **4 of 96 groups** produced a
-non-zero reward spread: every one of the 16 sampled rollouts was invalid, so every advantage was zero
-and no step was taken. After 96 groups, confirm moved 0/32 → 1/32.
-
-**Their budget, from a capability-matched checkpoint.** Their checkpoint 100 had seen 346k tokens; our
-step 200 has seen 410k. From there the same 96 groups x 16 rollouts produced **26 updates** — the
-method does work at this scale — and left the model behaviourally where it started: dev 29/32 → 29/32,
-confirm 29/32 → 29/32. At that point the trained families already sample correctly 95–100% of the
-time, so there is nothing left for the reward to fix.
-
-| | Reference | Their config, our weak checkpoint | Their budget, matched checkpoint |
-| --- | --- | --- | --- |
-| Confirm before | 0/24 | 0/32 | 29/32 |
-| Groups with reward signal | 73 of 96 | 4 of 96 | 26 of 96 |
-| Confirm after | 16/24 | 1/32 | 29/32 |
-
-<img src="docs/band.webp" alt="Reward signal and confirm movement across the three runs" width="100%"/>
-
-**The finding: executable-reward RL has a capability floor and a capability ceiling, and there is only
-a narrow band between them.** Below the floor every rollout is invalid, every advantage is zero, and
-extra compute buys nothing — that is where our step-100 policy sits. Above the ceiling the reward has
-nothing to correct — that is where our step-200 policy sits. The reference's checkpoint landed inside
-the band; that is a property of its pretraining budget, and nothing in the write-up makes it visible.
-
-The practical consequence for anyone copying the method: **check that your policy emits valid programs
-before spending compute on RL.** One pass@k run on the training split tells you which side of the band
-you are on, and we did not run it first.
-
-## Model
-
-```text
-bytes -> embedding -> four residual streams
-                       |
-        [linear attention + MoE] x 3
-                       |
-        [sparse attention + MoE] x 1
-                       |
-                  repeat x 3
-                       |
-              RMSNorm -> tied LM head
+```sh
+cargo run -p diffusion --release -- sample --backend wgpu \
+  --ckpt models/flowers-64-flow-dim24-13k --samples 16 --sampling-steps 20
 ```
 
-| Component | Reference | This port |
-| --- | --- | --- |
-| Total parameters | 25,730,592 | **25,730,592** |
-| Active per token | 9,805,344 | **9,805,344** |
-| Layers | 12 (9 linear + 3 sparse attention) | same |
-| Experts | 8 routed, top-2, +1 shared | same |
-| Residual streams | 4 | same |
-| Tokenizer | byte-level, 260 tokens | same |
-| Context | 192 | 192 |
+### What the pictures show
 
-The parameter counts match to the digit, which only happens if the architecture *and* the tied LM head
-are both right.
+<p align="center"><img src="docs/quality-comparison.webp" alt="64 samples each: real, DDIM 50, DDPM 200, flow 10/20/50" width="100%"/></p>
+
+DDIM is a soft colour mass, DDPM has petal edges, rectified flow holds daisy petals and flower
+centres. The gradient-energy ratio tracks it exactly: flow 1.06, DDPM 0.97, DDIM 0.94, photographs
+1.00.
+
+### The measurement story
+
+Four things were fixed by measuring rather than guessing, and each is written up in
+[`diffusion/README.md`](diffusion/README.md):
+
+- **A loader defect** fed the model a channel permutation while the sample writer undid it on
+  display. Loss and distance were self-consistent; only rendering the same tensor two ways exposed
+  it. Fixing it moved the same configuration from 10.28 to 6.54.
+- **The 128-sample Fréchet estimate was rank-deficient** (192 dimensions, 127 rank). The ±1.5 "noise"
+  it produced was the estimator failing, not the model; every number here uses 256 or 512 samples.
+- **A real-image floor** was measured before the 4.0 target was accepted (2.957 ± 0.234), so the
+  target meant something.
+- **The metric is not Inception FID.** In Inception-v3 space with a measured real-image floor (19.23
+  at 256 projected dimensions), the flow model scores 150.55 — **7.8× the floor**, where the pixel
+  estimator says 1.07×. The 8×8 metric measures coarse colour and layout; nothing here is comparable
+  with a paper's FID.
+- **Consistency flow matching did not work here.** Trained at the same budget it scores 26.06 at one
+  step and 3.71 at twenty: no few-step gain. The likely causes — a shared 0.999 EMA instead of a
+  dedicated 0.9999 shadow, and a constant delta instead of a schedule — are recorded in the diffusion
+  README as an untested hypothesis, not an excuse.
+- **A ViT backbone** (20.3M parameters, `vit-pytorch`) trained under the same flow objective reached
+  7.666 at 64×64 and 14.516 at 128×128, against the UNet's 3.170; at 128 the samples are 16×16
+  blocky noise. The JetViT post-training attention swap found nothing it could replace without
+  distillation (+92% to +734% loss). All three are recorded as negative results.
+- **128×128 costs more than it gives at fixed compute.** Same 112k-image budget: 6.450 against
+  64×64's 3.170 on the coarse estimator, whose floor is identical at both resolutions (2.945 vs
+  2.957) because 8×8 pooling discards detail.
+- **The metric is not Inception FID.** In Inception-v3 space with a measured real-image floor (19.23
+  at 256 projected dimensions), the flow model scores 150.55 — **7.8× the floor**, where the pixel
+  estimator says 1.07×. The 8×8 metric measures coarse colour and layout; nothing here is comparable
+  with a paper's FID.
 
 ## Quick start
 
 ```sh
 git clone https://github.com/adeerkhan/burn-lab
 cd burn-lab
-cargo test --workspace --release          # 97 tests
-cargo run -p glm53 --release -- params    # parameter counts
-```
+cargo test --workspace --release          # 122 tests
 
-Train and evaluate the language model:
-
-```sh
-# Pretrain, checkpointing along the way
-cargo run -p glm53 --release -- train --steps 400 --batch-size 16 \
-  --checkpoints 100,200,400 --out artifacts/glm53-run
-
-# Pick a checkpoint on dev, then measure it
-cargo run -p glm53 --release -- select --out artifacts/glm53-run
-cargo run -p glm53 --release -- evaluate \
-  --ckpt artifacts/glm53-run/checkpoint-0200 --split dev
-cargo run -p glm53 --release -- evaluate-passk \
-  --ckpt artifacts/glm53-run/checkpoint-0200 --split dev --samples 8
-
-# RLOO against executable reward
-cargo run -p glm53 --release -- rl \
-  --ckpt artifacts/glm53-run/checkpoint-0200 --out artifacts/glm53-rl \
-  --groups 32 --group-size 8 --temperature 0.4 --learning-rate 5e-5
-```
-
-Sample a completion:
-
-```sh
-cargo run -p glm53 --release -- generate \
-  --ckpt artifacts/glm53-run/checkpoint-0400 \
-  --prompt "# Complete this Python function.
-# Return x squared.
-def square_abc(x):"
-```
-
-```python
-def square_abc(x):
-    return x * x
-```
-
-<details>
-<summary><b>The MNIST lab</b></summary>
-<br/>
-
-The workspace root is the Burn Book's basic workflow: a CNN trained on MNIST with the `Learner`, a
-terminal dashboard and a burnpack checkpoint.
-
-```sh
-cargo run --release -- train            # train, with the live TUI dashboard
-cargo run --release -- test             # evaluate on the test set
-cargo run --release -- infer --index 42 # predict a single digit
-```
-
-Burn's dashboard only renders when stdout is a terminal, so
-`./scripts/dashboard.sh` runs the command inside `tmux` to get a real pty.
-
-</details>
-
-## A second workload: diffusion
-
-`diffusion/` ports [`lucidrains/denoising-diffusion-pytorch`](https://github.com/lucidrains/denoising-diffusion-pytorch)
-(the UNet, three beta schedules, DDPM and DDIM, the EMA) and
-[`lucidrains/rectified-flow-pytorch`](https://github.com/lucidrains/rectified-flow-pytorch) (a velocity
-field integrated with the midpoint rule). It is the counterpart to `glm53`: where that exercises
-attention and MoE over text, this exercises convolution, residual blocks and attention over a spatial
-grid.
-
-It trains on real photographs, not toys: the TensorFlow `flower_photos` set, 3,303 train and 367
-held out, at 64×64.
-
-<img src="docs/examples-flowers.webp" alt="Real flowers, then DDIM 20, DDIM 50 and DDPM 200 samples from the saved model" width="100%"/>
-
-| Sampler | Steps | pixel-FID ↓ | nearest L1 | gradient ratio | colour distance |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| DDIM | 20 | 7.262 | 0.286 | 0.818 | 0.263 |
-| DDIM | 50 | 5.131 ± 0.233 | 0.313 | 0.939 | 0.175 |
-| DDPM | 200 | 4.761 ± 0.346 | 0.315 | 0.966 | 0.145 |
-| **rectified flow** | **20** | **3.170 ± 0.074** | 0.334 | 1.063 | 0.101 |
-| reflow | 1 | 4.418 | 0.331 | 1.070 | — |
-| real images vs held out (floor) | — | 2.957 ± 0.234 | 0.329 | 1.000 | 0.117 |
-
-<img src="docs/examples-flow.webp" alt="Real flowers, then rectified flow at 10, 20 and 50 steps" width="100%"/>
-
-<img src="docs/quality-comparison.webp" alt="64 samples each from real flowers, DDIM 50, DDPM 200 and rectified flow at 10, 20 and 50 steps" width="100%"/>
-
-512 samples per draw, three draws per sampler where a spread is shown, EMA weights, 8×8×3 pooled pixels. The full study — the estimator's floor, the
-FID-versus-steps curve, the cap-capacity experiment and the loader fix that preceded it — is in
-[`diffusion/README.md`](diffusion/README.md), and the weights that produced these rows are in
-[`models/flowers-64-dim24-13k`](models/flowers-64-dim24-13k).
-
-DDIM and DDPM run on **one** checkpoint — two trajectories, not two models. Rectified flow is a
-second checkpoint with the same architecture, and it is the one that beats the 4.0 target: 20 ODE
-steps score 3.170 ± 0.074, 0.21 above the real-image floor, against DDPM's 4.761.
-
-```sh
+# Diffusion: train, sample, evaluate
+python3 scripts/prepare_flowers.py --size 64 --holdout 0.1 \
+  --out /tmp/flowers/train64.bin --holdout-out /tmp/flowers/held64.bin
+cargo run -p diffusion --release -- train --flow --backend wgpu \
+  --data /tmp/flowers/train64.bin --image-size 64 --dim 24 --steps 13000 \
+  --batch 16 --ema-decay 0.999 --checkpoint-every 1000 --out /tmp/flow
 cargo run -p diffusion --release -- sample --backend wgpu \
-  --ckpt models/flowers-64-dim24-13k --samples 16 --sampling-steps 200
-
-cargo run -p diffusion --release -- sample --backend wgpu \
-  --ckpt models/flowers-64-flow-dim24-13k --samples 16 --sampling-steps 20
+  --ckpt /tmp/flow --samples 16 --sampling-steps 20
+python3 scripts/ddpm_fidelity.py --samples /tmp/flow/ddim50.raw \
+  --held /tmp/flowers/held64.bin --train /tmp/flowers/train64.bin --size 64
 ```
 
-The flow matching implementation is complete for every option that does not need external weights: three predict modes, MSE and pseudo-Huber losses, the cosmap schedule, immiscible pairing, consistency matching, and reflow. A reflow pass (6,000 steps on 2,048 cached pairs) cuts **one-step** pixel-FID from 24.97 to **4.42**, at the cost of 0.6 at twenty steps.
+The language model, vision path and RL studies are documented in [`glm53/README.md`](glm53/README.md).
 
-Its schedules and `q_sample` are checked against values extracted from the reference source, and the
-parameter count matches the reference to the digit (2,439,043 at `dim 16`).
+## A second workload: language modelling
 
-A **ViT backbone** from [`vit-pytorch`](https://github.com/lucidrains/vit-pytorch) (20.3M parameters,
-patch 8, 64 tokens) was trained under the same flow objective for the same 13,000 steps: **pixel-FID
-7.67 ± 0.28**, against the UNet's 3.17. It is undertrained at this scale and the 8×8 patch grid shows
-in every sample. The **JetViT** post-training attention search
-([CVPR 2026](https://arxiv.org/abs/2605.26636)) was implemented for the parameter-compatible swap and
-rejected every block: linear attention cost 92–734% loss, and forcing four blocks plus a short
-fine-tune produced noise (FID 66). Details and the picture are in
-[`diffusion/README.md`](diffusion/README.md).
+`glm53/` ports a 25.7M-parameter GLM-5.3-Flash: hybrid attention, sparse mixture of experts, four
+residual streams, pretrained on a synthetic Python corpus and post-trained with RLOO against
+executable unit-test rewards. Pretraining takes 155 s on the same RTX 5060; dev pass@1 saturates at
+32/32 by step 400.
+
+The transferable result is the **RL band**: executable-reward RL has a capability floor (every
+rollout invalid, every advantage zero) and a capability ceiling (nothing left to correct), and only a
+narrow band between them responds. The reference's checkpoint landed inside it; ours did not, and the
+write-up shows why. Full tables and the negative replication are in [`glm53/README.md`](glm53/README.md).
 
 ## Repository layout
 
 ```
 burn-lab/
 ├── src/                  # the MNIST lab (Burn Book basic workflow)
-├── scripts/              # tmux helper for the TUI dashboard
-├── bench/                # forward-pass benchmark against the PyTorch reference
-├── docs/                 # figures + the script that renders them
-├── diffusion/            # DDPM/DDIM port of denoising-diffusion-pytorch
-├── models/               # saved checkpoints, with their metrics and usage
-└── glm53/                # the GLM-5.3-Flash port
-    ├── python/           # evaluator harness (AST allowlist + test runner)
-    ├── src/
-    │   ├── attention.rs      linear + gathered sparse attention
-    │   ├── moe.rs            dense and sparse expert dispatch
-    │   ├── block.rs          hybrid block, four-stream hyper-connection
-    │   ├── model.rs          the language model
-    │   ├── evaluator.rs      fail-closed executable verifier
-    │   ├── generate.rs       batched sampling with early stop
-    │   ├── evaluation.rs     pass@1 and pass@k
-    │   ├── rl.rs             RLOO
-    │   └── training.rs       pretraining with periodic checkpoints
-    └── tests/            # gradient check, routing, golden fixture, round-trip
+├── diffusion/            # DDPM / DDIM / rectified flow / reflow / ViT
+│   ├── src/
+│   │   ├── unet.rs          the reference UNet, and the backbone enum
+│   │   ├── vit.rs           viT backbone and JetViT attention search
+│   │   ├── diffusion.rs     schedules, q_sample, DDPM, DDIM
+│   │   ├── flow.rs          rectified flow, consistency, reflow pair loss
+│   │   ├── ema.rs           shadow weights
+│   │   └── inspect.rs       weight and gradient dumps
+│   └── tests/            # parity against the reference, flow, ViT, loader
+├── models/               # saved checkpoints with their metrics
+├── scripts/              # data packing, fidelity, floor, curves, heatmaps
+├── docs/                 # figures
+└── glm53/                # the language-model port
 ```
-
-## The port
-
-### How complete is this
-
-Everything in the reference is ported: the language model, the vision path, the
-evaluator, the RL stage, the two miniature pretraining studies, the analyzers and
-the receipts.
-
-| Reference | Status |
-| --- | --- |
-| `model.py`, `tokenizer.py`, `tasks.py` | ported — counts match to the digit |
-| `evaluator.py` | ported — Rust driver, embedded `python3` harness, same allowlist |
-| `runtime.py` | ported — `generate_group` plus checkpoint receipts with sha256 |
-| `vision.py`, `train_vision.py` | ported — faithful tower and labelled baseline |
-| `full_25m_vision_digit_pilot.py` | ported |
-| `train_pretrain.py`, `train_rl.py` | ported |
-| `evaluate.py`, `evaluate_passk.py` | ported, with `--json` receipts |
-| `experiments/*` (5) | ported — diversity and curriculum/ordering |
-| `analyze_*.py`, `system_receipt.py` | ported — McNemar, permutation, bootstrap, Holm |
-| `run_rl_variant_screen.sh` | ported as `rl-screen` |
-| `tests/` | replaced — 82 Rust tests |
-
-### What matches the reference
-
-- **The model, exactly.** Same shapes, same parameter counts, same tied head.
-- **The evaluator, exactly.** Same AST `DENIED` node list, `SAFE_CALLS` allowlist, restricted
-  builtins, 2048-byte cap and strict `type(actual) is type(expected)` comparison.
-- **The algorithm.** RLOO with leave-one-out advantages, mean per-token log-probabilities,
-  `last-block-head` freezing, binary and case-fraction rewards, gradient clipping at 1.0.
-
-### Where it deviates, and why
-
-| Deviation | Why |
-| --- | --- |
-| The evaluator shells out to `python3` | The reference *executes* candidates against unit tests. Embedding a second Python runtime was the alternative; a batched subprocess keeps the semantics exact. |
-| Sparse attention masks instead of gathering | The reference gathers into a rank-5 tensor that Burn's `gather` cannot produce. A gathered softmax over a selected set equals a masked softmax over all keys. |
-| Linear attention contracts instead of accumulating | Same reason: the reference's rank-5 cumulative outer product becomes a masked contraction. Checked numerically against a transcription of the reference. |
-| Dense expert dispatch is the default | Both are implemented and agree to 1e-5, but sparse is ~30× slower here — every expert sees a different row count and the JIT backend recompiles per shape. Sparse is what lets batch 32 fit; dense is what makes it fast. |
-| The LM head reads the embedding weight | Burn's module tree has no weight tying, so the head is `hidden @ embedding.weight.T`. This is what makes the count match. |
-| The corpus generator is its own PRNG | Same eight families and prompt shape, different random stream. |
-
-### Verification
-
-Nothing here is asserted without a check:
-
-- **Finite-difference gradient check.** The highest-value test in the repo: a subtly wrong gradient
-  still produces a falling loss curve, so only this catches it.
-- **Sparse vs dense expert dispatch** agree to 1e-5, and only routed experts receive gradient.
-- **A golden forward fixture** on a deterministic parameter pattern, so a rewiring refactor fails loudly.
-- **The linear attention** matches a direct transcription of the reference's cumulative-sum definition.
-- **Checkpoint round-trips** and the two backends agree to 1e-4.
-
-### Decoding speed
-
-Generation now keeps a per-layer KV cache instead of recomputing the prefix. Warmed, on a
-48-token prompt with 16 rows and 24 new tokens: **6.5x faster on `flex`** (934 against
-143 tok/s) and **15.4x on `wgpu`** (356 against 23 tok/s). Cached logits match the full
-prefix within 1e-5 at every length.
-
-## Burn versus the Python stack
-
-Measured on one machine, same config, same shapes. This is a port of a specific
-reference, so the throughput lines compare *this port* with *that
-implementation* — including the port's own more expensive formulations (see
-[deviations](#where-it-deviates-and-why)), not Burn against PyTorch in the
-abstract.
-
-| | burn-lab | PyTorch reference |
-| --- | --- | --- |
-| Distribution | **134 MB** binary, 5 shared libraries | 6.8 GB virtualenv |
-| Cold start to a ready model | **~0.9 s** | ~1.6 s (`import torch` + build) |
-| Peak RSS, one generation | **385 MB** | 781 MB |
-| Forward, GPU, 1 x 192 (decode) | **22.2 ms** | 25.6 ms |
-| Forward, GPU, 16 x 128 | 57.7 ms · 35.5k tok/s | **43.7 ms · 46.8k tok/s** |
-| Forward, CPU, 16 x 128 | 1,070 ms · 1.9k tok/s | **315 ms · 6.5k tok/s** |
-
-RTX 5060 Laptop (Vulkan through wgpu versus CUDA), 28-core CPU, PyTorch
-2.11.0+cu128. Reproduce with `bench/pytorch_forward.py` and
-`cargo run -p glm53 --release --example bench_forward`.
-
-<details>
-<summary><b>What this says, and what it does not</b></summary>
-<br/>
-
-- **Deployment is not close.** A 134 MB self-contained binary against a 6.8 GB
-  virtualenv. The binary links `libc`, `libm`, `libgcc` and the loader — no
-  Python, no libtorch, no CUDA runtime.
-- **Startup favours Rust**, and the reason is mundane: the interpreter and 600 MB
-  of imports disappear. That is most of PyTorch's cold-start budget.
-- **GPU throughput is within 1.3x of PyTorch CUDA** despite the port doing
-  materially more arithmetic — the linear attention uses a masked contraction
-  instead of a cumulative outer product, and the default MoE evaluates all eight
-  experts instead of the two a token picks.
-- **At decode shape the port is slightly ahead** (22.2 ms against 25.6 ms at
-  batch 1). At that size per-call overhead matters more than throughput, and it
-  is the one shape where Burn comes out in front.
-- **CPU is the clear loss**, 3.4x slower on `flex`. A pure-Rust eager backend
-  does not compete with decades of BLAS and oneDNN tuning, and nothing here
-  claims it does.
-
-</details>
-
-### What is not a benchmark
-
-- **One artifact, no export step.** The reference trains in PyTorch and any real
-  deployment then exports to ONNX or a production engine. Here the code that
-  trains is the code that ships; a checkpoint is just weights.
-- **Ranks and tensor kinds are checked at compile time.** Passing a `Tensor<2>`
-  where a `Tensor<3>` belongs fails the build. Device mismatches are a clear
-  runtime panic rather than a silent cross-device copy — which is how one bug in
-  this very port was caught.
-- **`cargo test` runs 97 tests in about a second** once built, including a
-  numerical gradient check.
-
-## What we learned about Burn
-
-Four things a language-model port actually trips over. Each is written up with symptom, cause and
-workaround in the port notes.
-
-| Finding | Severity |
-| --- | --- |
-| An OOM can return `SIGILL` rather than an `Err`, and can leave the wgpu device lost across processes | major |
-| No weight tying in the module tree — a tied-embedding model cannot be a plain module tree | minor |
-| `gather` cannot produce a rank-5 result, forcing gathered attention to be reformulated | minor |
-| No `no_grad` equivalent — generation on an autodiff device records every forward and exhausts it | minor |
-
-Plus a tail of ergonomics that each cost a compile cycle: `reshape::<D2, _>` needs both generic
-arguments, every `*_dim` reduction keeps its dimension (boolean reductions included), `one_hot`
-preserves tensor kind, `Int` defaults to I32, and `visit_float` does not name the parameter it visits.
-
-None of it was fatal. The two things that genuinely surprised us in Burn's favour were `RmsNorm`
-accepting any rank, and `RotaryEncoding` being numerically identical to a hand-written RoPE.
-
-## What this port adds
-
-The reference is a research demo. This is a research demo *and* a port, which made a few things
-possible that the original could not do:
-
-- **A second implementation to check the first against.** The reference has no way to test its own
-  algorithm, because it is the only implementation. Here, the linear attention is checked against a
-  direct transcription of the reference's cumulative-sum definition, sparse and dense expert dispatch
-  agree to 1e-5, and every gradient is checked against finite differences. Those tests exist only
-  because there are two formulations to compare.
-- **A cross-backend differential.** `flex` and `wgpu` must agree to 1e-4 on the same weights. A
-  single-stack project cannot ask that question.
-- **A measured framework comparison.** 134 MB binary versus a 6.8 GB virtualenv, decode-shape latency
-  ahead, CPU throughput behind. See [Burn versus the Python stack](#burn-versus-the-python-stack).
-  The reference reports no framework-level numbers at all.
-- **A negative replication, run deliberately.** We reproduced the experiment, found the outcome
-  differs, and identified which knob explains it — rollout budget against a saturated policy. The
-  family-level data shows interference *between* rewarded families, which the reference's
-  three-family design could not observe.
-- **Systems findings.** An out-of-memory condition surfacing as `SIGILL` rather than an `Err`, a wgpu
-  device left lost across processes after it, and variable-length expert dispatch defeating JIT kernel
-  reuse by 30x. None of these are visible from Python.
-
-What the reference does better, for the record: the vision path, three paired-seed pretraining
-ablations with p-values, an eight-arm RL variant screen with a McNemar confirmation, and a receipts
-discipline that preserves every rollout and checkpoint hash.
 
 ## Tests
 
 ```sh
-cargo test -p glm53 --release                                                  # 97 tests
-GLM53_WGPU_TEST=1 cargo test -p glm53 --release --test model_checks backends_agree
+cargo test --workspace --release          # 122 passing, 1 ignored
+cargo clippy --workspace --release --all-targets
 ```
 
-The cross-backend check is gated on an environment variable so the suite still runs on a machine
-without a GPU.
-
-## Figures
-
-`docs/make_plots.py` renders every figure from the measured numbers, using Burn's palette. Regenerate
-with:
-
-```sh
-python3 docs/make_plots.py && magick docs/*.png docs/*.webp
-```
+The diffusion suite includes five numerical parity tests against values extracted from the reference
+source, the flow interpolation and objective tests, the ViT shape and attention-swap tests, and the
+loader layout test that pins channel order.
 
 ## Credits and license
 
-The model, the synthetic corpus and the executable-reward RL method are
-[`vukrosic/glm-5.3-flash-from-scratch`](https://github.com/vukrosic/glm-5.3-flash-from-scratch), MIT
-licensed.
+- [`lucidrains/denoising-diffusion-pytorch`](https://github.com/lucidrains/denoising-diffusion-pytorch)
+  and [`lucidrains/rectified-flow-pytorch`](https://github.com/lucidrains/rectified-flow-pytorch) —
+  the diffusion references, MIT.
+- [`lucidrains/vit-pytorch`](https://github.com/lucidrains/vit-pytorch) and *JetViT* (CVPR 2026
+  Findings) — the ViT backbone and attention-search idea.
+- [`vukrosic/glm-5.3-flash-from-scratch`](https://github.com/vukrosic/glm-5.3-flash-from-scratch) — the
+  language model and RL method, MIT.
+- [Burn](https://github.com/tracel-ai/burn) by Tracel AI, MIT/Apache-2.0.
 
-The framework is [Burn](https://github.com/tracel-ai/burn) by Tracel AI, MIT/Apache-2.0.
-
-This port is MIT, matching the reference it derives from.
+This port is MIT.

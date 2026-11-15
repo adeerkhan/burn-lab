@@ -26,5 +26,6 @@
   },
   "ema_decay": 0.999,
   "reflow": true,
-  "step": 6000
+  "step": 6000,
+  "pairs": 8192
 }
