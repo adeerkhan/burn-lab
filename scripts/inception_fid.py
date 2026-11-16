@@ -80,8 +80,13 @@ def main() -> None:
 
     samples = load_raw(args.samples)
     reference = load_u8(args.reference, args.size)
-    if len(samples) <= 2048:
-        raise SystemExit(f"need more than 2048 samples for full rank, got {len(samples)}")
+    # The covariance needs more samples than dimensions; with a projection the
+    # requirement drops to the projected width.
+    dimensions = args.project or 2048
+    if len(samples) <= dimensions:
+        raise SystemExit(
+            f"need more than {dimensions} samples for full rank, got {len(samples)}"
+        )
     print(f"samples {samples.shape}, reference {reference.shape}")
 
     fa = features(samples)

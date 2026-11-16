@@ -45,6 +45,7 @@ cannot score zero, and 4.0 was the target this project set itself.
 | 64×64 `dim 24`, 13k | **flow** | **20** | **3.170** | 0.334 | 1.063 |
 | 128×128 `dim 16`, 14k | flow | 20 | 6.450 | 0.358 | 1.240 |
 | 64×64 `dim 24`, reflow | flow | 1 | **4.079** | 0.331 | 1.056 |
+| 64×64 `dim 24`, 34,476 images, 22k | flow | 20 | 5.963 | 0.349 | 0.987 |
 | 64×64 ViT `dim 256`, 13k | flow | 20 | 7.666 | 0.345 | 1.479 |
 | 128×128 ViT `dim 256`, 13k | flow | 20 | 14.516 | 0.743 | 9.641 |
 | 64×64 `dim 24`, consistency | flow | 1 | 26.059 | — | — |
@@ -56,6 +57,7 @@ Three points carry the study:
   rectified flow **3.170**. That is a larger effect than any sampler or step-count change.
 - **Steps are not monotone.** 7k → 24k improves by 0.59; 24k → 48k *harms* by 1.38 while the training
   loss keeps falling.
+- **The data lever works in the metric that sees detail.** Ten times the photographs (TensorFlow flowers + Oxford 102, with random-resized-crop augmentation) took Inception-256 FID from 151.0 to **106.5** against a floor of 17.8, while 8×8 pixel-FID moved the other way, 3.40 to 5.96. The two metrics measure different things; the coarse one cannot see what the extra data bought.
 - **Reflow buys the cheap end.** One Euler step goes from 24.967 to **4.079**, a 6.1× improvement, at
   a cost of 0.7 at twenty steps.
 - **Resolution costs compute, and the metric cannot see it.** The same 112k-image budget at 128×128
@@ -71,6 +73,7 @@ Three points carry the study:
 | [`models/flowers-64-dim24-13k`](models/flowers-64-dim24-13k) | the 64×64 DDPM/DDIM model, `dim 24`, 13k steps | 21 MB |
 | [`models/flowers-64-flow-dim24-13k`](models/flowers-64-flow-dim24-13k) | same UNet, rectified-flow objective, FID 3.170 | 21 MB |
 | [`models/flowers-64-reflow-dim24-6k`](models/flowers-64-reflow-dim24-6k) | reflow pass, one-step sampling | 21 MB |
+| [`models/flowers-64-flow-big-dim24-22k`](models/flowers-64-flow-big-dim24-22k) | flow on 10× data (TF + Oxford 102), best Inception score | 21 MB |
 
 Each has a card with its checksum, metrics and a one-line sampling command.
 

@@ -164,6 +164,79 @@ pixel estimator measures coarse colour and layout, which the model has learned,
 and stops there. **3.170 is not Inception FID 3.170**, and nothing here should be
 compared with a paper's FID.
 
+### Ten times the data, at the same step budget
+
+Oxford Flowers 102 (8,189 photographs, 102 classes) was added to the TensorFlow
+set, each image contributing a centre crop and two random-resized crops with
+flips: 3,303 -> **34,476 training images**, with the held-out photographs removed
+from both sources by path (see `GLM-039`). Both models below are scored on the
+*same* 367 held-out images and against the same 3,303-image reference; 512-sample
+draws, 20 ODE steps.
+
+| Model | Training images | Steps | pixel-FID | nearest L1 | grad ratio | colour dist. | Inception-256 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small | 3,303 | 13,000 | **3.396** | 0.336 | 1.066 | 0.105 | 151.04 |
+| big, 18k checkpoint | 34,476 | 18,000 | 5.660 | 0.346 | 0.998 | 0.105 | 113.58 |
+| big, 22k checkpoint | 34,476 | 22,000 | 5.963 | 0.349 | 0.987 | 0.107 | **106.54** |
+| real-image floor | — | — | — | 0.331 | 1.000 | — | 17.79 |
+
+**The two metrics disagree, and that is the result.**
+
+- In Inception space the bigger dataset is **30% better** at the 22k checkpoint,
+  106.54 against 151.04: 6.0x the floor instead of 8.5x. Detail and flower
+  structure improved steadily with steps, which is what the eye sees in the
+  grids.
+- In the 8x8 pixel space it is worse, 5.660 against 3.396, even though the
+  colour-histogram distance is *identical* (0.105). The coarse covariance moved
+  away from the held-out set while the palette did not.
+- The big run was cut at 18,000 steps by a 90-minute cap while the GPU was
+  shared, and it saw each photograph far fewer times: about 8 epochs over
+  34,476 images against 63 epochs over 3,303. A fixed step budget is not free
+  when the data grows tenfold; data and steps have to scale together.
+
+So step 1 of the plan worked **in the metric that sees detail**, and the first
+4k steps of step 2 improved it further (113.58 -> 106.54). Pixel-FID moved the
+other way at both points. The 22,000-step checkpoint is saved as
+[`models/flowers-64-flow-big-dim24-22k`](../models/flowers-64-flow-big-dim24-22k).
+The remaining half of step 2 is a clean continuation to 48k steps with an
+optimizer-state-aware resume; the user stopped the first attempt.
+
+### What the numbers say, and the order to fix them in
+
+Two measurements point at the same problem:
+
+- **The gap is structure, not colour.** The 8x8 pixel estimator says the model
+  is 1.07x its floor; Inception space says **7.8x**. Pooling to 8x8 discards
+  texture and object parts, which is exactly where the samples are weak: the
+  colour statistics are right and the shapes are mush.
+- **The model overfits 3,303 images.** From 24k to 48k steps the training loss
+  falls (0.106 -> 0.093) while held-out sample quality *degrades* (5.96 -> 7.34).
+  More steps on the same photographs is not the answer.
+
+So the order is:
+
+1. **Data, ten times over.** Oxford Flowers 102 (8,189 images) alongside the
+   TensorFlow set, each photograph contributing random-resized-crop and flip
+   variants: 3,303 -> 35,207 training images, with the held-out split fixed at
+   the same 367 images so the metric does not move. Preparation is minutes; the
+   training run is an hour.
+2. **Then steps.** With the larger set, continue past 24k and re-measure.
+3. **Re-measure the ladder in Inception space.** The "more steps hurt" reading
+   came from the blind estimator. With a floor and 512-sample draws it can be
+   checked rather than assumed.
+4. **Cheap A/Bs, 35 minutes each.** EMA decay 0.9999; UNet dropout 0.1; a
+   fifth UNet level (`dim_mults (1,2,4,8,16)`); `predict=clean` and
+   `predict=noise`; the cosmap schedule.
+5. **Resolution last.** At an equal image budget 128x128 was worse (6.450 against
+   3.170). It only pays once data and steps are fixed.
+6. **Consistency with a delta schedule.** The implementation here is a
+   simplification of the reference's and bought nothing; the paper's schedule
+   is the untested part.
+
+What not to do: tune the pixel metric further, spend hours on the ViT (7.666 at
+64x64, 14.516 at 128x128), or compute Inception FID at 2048 dimensions without a
+floor - with 3,303 real images no floor exists at that width.
+
 ### Reflow: one-step sampling
 
 Reflow is the paper's second rectification pass. The model is retrained on

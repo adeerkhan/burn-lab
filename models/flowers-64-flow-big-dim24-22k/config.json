@@ -1,0 +1,25 @@
+{
+  "dim": 24,
+  "image_size": 64,
+  "channels": 3,
+  "timesteps": 200,
+  "sampling_timesteps": 20,
+  "dim_mults": [
+    1,
+    2,
+    4,
+    8
+  ],
+  "data": "/home/adeerkhan/tmp/flowers/train64-big.bin",
+  "flow": true,
+  "backbone": "cnn",
+  "patch_size": 8,
+  "depth": 8,
+  "heads": 8,
+  "attention": [],
+  "predict": "flow",
+  "loss": "mse",
+  "schedule": "identity",
+  "immiscible": false,
+  "consistency": false
+}
