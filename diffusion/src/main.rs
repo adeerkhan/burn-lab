@@ -15,6 +15,8 @@ use diffusion::flow::{
 use diffusion::unet::{Unet, UnetConfig};
 use diffusion::vit::{AttentionKind, Vit, VitConfig};
 use diffusion::vit_classifier::{ClassifierConfig, VitClassifier};
+use diffusion::world_model::{TOKENS, WorldConfig, WorldModel};
+use diffusion::world_vq::{VqConfig, VqVae, edge_loss};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct CheckpointConfig {
@@ -367,8 +369,12 @@ fn main() {
         "reflow" => train_reflow(&options),
         "migrate" => migrate_record(&options),
         "classify" => classify(&options),
+        "world-vq" => train_world_vq(&options),
+        "world-train" => train_world_model(&options),
+        "world-encode" => encode_world_tokens(&options),
+        "world-dream" => dream_rollout(&options),
         "make-pairs" => make_pairs(&options),
-        other => panic!("unknown command `{other}`, expected train, sample or smoke"),
+        other => panic!("unknown command `{other}`; see README for the command list"),
     }
 }
 
@@ -528,6 +534,408 @@ fn cross_entropy(logits: Tensor<2>, labels: &Tensor<2, Int>, _device: &Device) -
     // log-softmax then gather the log-probability of the correct class.
     let log_probs = burn::tensor::activation::log_softmax(logits, 1);
     log_probs.gather(1, labels.clone()).mul_scalar(-1.0).mean()
+}
+
+/// Stream one frame by episode and time index; no dataset is held in memory.
+fn world_frame_at(path: &str, episode: usize, time: usize, device: &Device) -> Tensor<4> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).expect("open the frame file");
+    let index = episode * 129 + time;
+    let mut raw = vec![0u8; 3 * 64 * 64];
+    file.seek(SeekFrom::Start((index * 3 * 64 * 64) as u64))
+        .expect("seek frames");
+    file.read_exact(&mut raw).expect("read frame");
+    let mut pixels = Vec::with_capacity(raw.len());
+    let plane = 64 * 64;
+    for channel in 0..3 {
+        for pixel in 0..plane {
+            pixels.push(raw[3 * pixel + channel] as f32 / 127.5 - 1.0);
+        }
+    }
+    Tensor::<4>::from_data(TensorData::new(pixels, [1, 3, 64, 64]), device)
+}
+
+/// Tokenizer training: L1+MSE reconstruction and an edge loss, with an EMA
+/// codebook. No GAN — the reference found it unstable.
+fn train_world_vq(options: &Options) {
+    let device = options.device().autodiff();
+    let options = &options;
+    let prefix = if options.data.is_empty() {
+        "/home/adeerkhan/tmp/world/data".to_string()
+    } else {
+        options.data.clone()
+    };
+    let episodes = 400;
+    let steps_per_episode = 129;
+    let frames = episodes * steps_per_episode;
+    let config = VqConfig {
+        dim: options.dim.min(64),
+        codes: if options.timesteps > 0 {
+            options.timesteps
+        } else {
+            64
+        },
+        ..VqConfig::default()
+    };
+    let mut model = VqVae::new(&config, &device);
+    let mut optimizer = AdamWConfig::new().init();
+    println!(
+        "VQ-VAE dim={} codes={} frames={}",
+        config.dim, config.codes, frames
+    );
+
+    let started = std::time::Instant::now();
+    for step in 1..=options.steps {
+        let mut rng = diffusion::data::Rng::new(options.seed + step as u64);
+        let episode = rng.below(380);
+        let time = rng.below(128);
+        let x = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
+        let (recon, _, commit) = model.forward(x.clone());
+        let error = x.clone().sub(recon.clone());
+        let rec = error
+            .clone()
+            .abs()
+            .mean()
+            .add(error.powf_scalar(2.0).mean());
+        let loss = rec.add(edge_loss(&recon, &x)).add(commit.mul_scalar(0.25));
+        let value = loss.clone().into_scalar::<f32>();
+        let grads = GradientsParams::from_grads(loss.backward(), &model);
+        let progress = step as f64 / options.steps as f64;
+        let lr = 1e-4 * 0.5 * (1.0 + (std::f64::consts::PI * progress).cos());
+        model = optimizer.step(lr, model, grads);
+        model.update_codebook(&model.encode(x.clone()).detach());
+
+        if step == 1 || step % 100 == 0 {
+            println!("step {step:>5} rec {value:.4}");
+        }
+    }
+    println!("trained in {:.1}s", started.elapsed().as_secs_f64());
+    std::fs::create_dir_all(&options.out).ok();
+    model
+        .clone()
+        .valid()
+        .into_record()
+        .save(format!("{}/model", options.out))
+        .expect("save the tokenizer");
+    std::fs::write(
+        format!("{}/config.json", options.out),
+        serde_json::to_string_pretty(&config).expect("serialise"),
+    )
+    .expect("write config");
+    leave_after_writing();
+}
+
+/// Encode all recorded frames into a flat i64 token file the world model reads.
+fn encode_world_tokens(options: &Options) {
+    use std::io::Write;
+    let device = options.device();
+    let prefix = if options.data.is_empty() {
+        "/home/adeerkhan/tmp/world/data".to_string()
+    } else {
+        options.data.clone()
+    };
+    let checkpoints = if options.checkpoint.is_empty() {
+        "/home/adeerkhan/tmp/world/vq".to_string()
+    } else {
+        options.checkpoint.clone()
+    };
+    let config: VqConfig = serde_json::from_str(
+        &std::fs::read_to_string(format!("{checkpoints}/config.json"))
+            .expect("read tokenizer config"),
+    )
+    .expect("parse tokenizer config");
+    let mut model = VqVae::new(&config, &device);
+    let record = ModuleRecord::load(format!("{checkpoints}/model")).expect("load tokenizer");
+    model = model.load_record(record);
+
+    let episodes = 400;
+    let steps = 129;
+    let mut file =
+        std::fs::File::create(format!("{prefix}/tokens.bin")).expect("create token file");
+    let started = std::time::Instant::now();
+    for episode in 0..episodes {
+        for time in 0..steps {
+            let x = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
+            let ids = model.ids(model.encode(x));
+            let values = ids
+                .into_data()
+                .convert::<i64>()
+                .try_to_vec::<i64>()
+                .unwrap();
+            for value in values {
+                file.write_all(&value.to_le_bytes()).expect("write token");
+            }
+        }
+        if episode % 100 == 0 {
+            println!("encoded episode {episode}");
+        }
+    }
+    println!(
+        "encoded {episodes} episodes in {:.1}s",
+        started.elapsed().as_secs_f64()
+    );
+    leave_after_writing();
+}
+
+/// World-model training on tokens encoded by the VQ-VAE. The dataset is packed
+/// once into a flat i64 token file so training stays memory-bounded.
+fn train_world_model(options: &Options) {
+    let device = options.device().autodiff();
+    let options = &options;
+    let prefix = if options.data.is_empty() {
+        "/home/adeerkhan/tmp/world/data".to_string()
+    } else {
+        options.data.clone()
+    };
+    let token_path = format!("{prefix}/tokens.bin");
+    if !std::path::Path::new(&token_path).exists() {
+        panic!("no {token_path}; run scripts/world_tokenize.py first");
+    }
+    let tokenizer_config: VqConfig = serde_json::from_str(
+        &std::fs::read_to_string(format!("{prefix}/vq-config.json")).unwrap_or_else(|_| {
+            std::fs::read_to_string("/home/adeerkhan/tmp/world/vq2/config.json")
+                .expect("read tokenizer config")
+        }),
+    )
+    .expect("parse tokenizer config");
+    let config = WorldConfig {
+        codes: tokenizer_config.codes,
+        dim: options.dim.min(128),
+        layers: options.depth.min(4),
+        heads: options.heads.min(8),
+        context: 4,
+    };
+    let mut model = WorldModel::new(&config, &device);
+    let mut optimizer = AdamWConfig::new().init();
+    let total = std::fs::metadata(&token_path).unwrap().len() as usize / (8 * TOKENS);
+    println!(
+        "world model dim={} layers={} heads={} tokens={}",
+        config.dim, config.layers, config.heads, total
+    );
+
+    let started = std::time::Instant::now();
+    for step in 1..=options.steps {
+        let (seq, actions, targets) = world_batch(
+            WorldBatchArgs {
+                mask: config.codes as i64,
+                tokens_path: &token_path,
+                actions_path: &format!("{prefix}/actions.bin"),
+                total,
+                batch: options.batch,
+                context: config.context,
+                seed: options.seed + step as u64,
+            },
+            &device,
+        );
+        let logits = model.forward_seq(seq, actions);
+        let [batch, frames, tokens, codes] = logits.dims();
+        let flat = logits.reshape([batch * frames * tokens, codes]);
+        let target = targets.reshape([batch * frames * tokens]);
+        let loss = burn::tensor::activation::log_softmax(flat, 1)
+            .gather(1, target.clone().reshape([-1, 1]))
+            .mul_scalar(-1.0)
+            .mean();
+        let value = loss.clone().into_scalar::<f32>();
+        let grads = GradientsParams::from_grads(loss.backward(), &model);
+        model = optimizer.step(1e-3, model, grads);
+
+        if step == 1 || step % 100 == 0 {
+            println!("step {step:>5} loss {value:.4}");
+        }
+    }
+    println!("trained in {:.1}s", started.elapsed().as_secs_f64());
+    std::fs::create_dir_all(&options.out).ok();
+    model
+        .clone()
+        .valid()
+        .into_record()
+        .save(format!("{}/model", options.out))
+        .expect("save the world model");
+    std::fs::write(
+        format!("{}/config.json", options.out),
+        serde_json::to_string_pretty(&config).expect("serialise"),
+    )
+    .expect("write config");
+    leave_after_writing();
+}
+
+/// Roll out a dream: warm-start from real frames, then feed the model its own
+/// predictions and compare them with the real room under the same actions.
+fn dream_rollout(options: &Options) {
+    let device = options.device();
+    let prefix = if options.data.is_empty() {
+        "/home/adeerkhan/tmp/world/data".to_string()
+    } else {
+        options.data.clone()
+    };
+    let checkpoints = if options.checkpoint.is_empty() {
+        "/home/adeerkhan/tmp/world/wm".to_string()
+    } else {
+        options.checkpoint.clone()
+    };
+    let vq_dir = if options.eval_data.is_empty() {
+        "/home/adeerkhan/tmp/world/vq".to_string()
+    } else {
+        options.eval_data.clone()
+    };
+    let wm_config: WorldConfig = serde_json::from_str(
+        &std::fs::read_to_string(format!("{checkpoints}/config.json")).expect("read world config"),
+    )
+    .expect("parse world config");
+    let vq_config: VqConfig = serde_json::from_str(
+        &std::fs::read_to_string(format!("{vq_dir}/config.json")).expect("read vq config"),
+    )
+    .expect("parse vq config");
+
+    let mut vq = VqVae::new(&vq_config, &device);
+    vq = vq.load_record(ModuleRecord::load(format!("{vq_dir}/model")).expect("load tokenizer"));
+    let mut wm = WorldModel::new(&wm_config, &device);
+    wm = wm
+        .load_record(ModuleRecord::load(format!("{checkpoints}/model")).expect("load world model"));
+
+    let context = wm_config.context;
+    let steps = options.steps.max(1);
+    let mut history: Vec<Tensor<1, Int>> = Vec::new();
+    let mut actions: Vec<i64> = Vec::new();
+    for time in 0..context {
+        let frame = world_frame_at(&format!("{prefix}/frames.bin"), 0, time, &device);
+        let ids = vq.ids(vq.encode(frame)).reshape([TOKENS]);
+        history.push(ids);
+        if time > 0 {
+            actions.push(diffusion::data::Rng::new(options.seed + time as u64).below(5) as i64);
+        }
+    }
+    let mut errors = Vec::new();
+    for step in 0..steps {
+        let action = diffusion::data::Rng::new(options.seed + 1000 + step as u64).below(5) as i64;
+        actions.push(action);
+        let seq = Tensor::<3, Int>::from_data(
+            TensorData::new(
+                history
+                    .iter()
+                    .flat_map(|ids| {
+                        ids.clone()
+                            .into_data()
+                            .convert::<i64>()
+                            .try_to_vec::<i64>()
+                            .unwrap()
+                    })
+                    .collect::<Vec<_>>(),
+                [1, context, TOKENS],
+            ),
+            &device,
+        );
+        let acts = Tensor::<2, Int>::from_data(
+            TensorData::new(actions.clone(), [1, actions.len()]),
+            &device,
+        );
+        let predicted = wm.predict(seq, acts);
+        let dream = vq.decode_ids(predicted.reshape([TOKENS, 1]));
+
+        let real_frame =
+            world_frame_at(&format!("{prefix}/frames.bin"), 0, context + step, &device);
+        let error = dream
+            .clone()
+            .sub(real_frame.clone())
+            .abs()
+            .mean()
+            .into_scalar::<f32>();
+        errors.push(error * 127.5);
+
+        // [real | dream] strip for one image per 10 steps.
+        if step % 10 == 0 {
+            let strip = Tensor::cat(vec![real_frame, dream.clone()], 3);
+            save_samples(strip, &format!("{}/step-{step:04}.png", options.out));
+        }
+        let next = vq.ids(vq.encode(dream.clone())).reshape([TOKENS]);
+        history.remove(0);
+        history.push(next);
+        actions.remove(0);
+    }
+    let mean = |range: std::ops::Range<usize>| -> f32 {
+        if range.start >= errors.len() {
+            return f32::NAN;
+        }
+        let end = range.end.min(errors.len());
+        errors[range.start..end].iter().sum::<f32>() / (end - range.start) as f32
+    };
+    let (early, mid, late) = (mean(0..10), mean(10..30), mean(30..errors.len()));
+    println!("dream MAE (0-255): steps 1-10 {early:.2}, 11-30 {mid:.2}, 31+ {late:.2}");
+    leave_after_writing();
+}
+
+/// One training window: context frames + masked target frame, with the action
+/// that produced each frame. Read straight from the flat token file.
+struct WorldBatchArgs<'a> {
+    mask: i64,
+    tokens_path: &'a str,
+    actions_path: &'a str,
+    total: usize,
+    batch: usize,
+    context: usize,
+    seed: u64,
+}
+
+fn world_batch(
+    args: WorldBatchArgs<'_>,
+    device: &Device,
+) -> (Tensor<3, Int>, Tensor<2, Int>, Tensor<3, Int>) {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut tokens_file = std::fs::File::open(args.tokens_path).expect("open tokens");
+    let mut actions_file = std::fs::File::open(args.actions_path).expect("open actions");
+    let mut rng = diffusion::data::Rng::new(args.seed);
+    let frames = args.context + 1;
+    let mut seq = Vec::with_capacity(args.batch * frames * TOKENS);
+    let mut acts = Vec::with_capacity(args.batch * frames);
+    let mut targets = Vec::with_capacity(args.batch * frames * TOKENS);
+
+    for _ in 0..args.batch {
+        let episode = rng.below(args.total / 129);
+        let time = rng.below(128 - frames) + frames;
+        for slot in 0..frames {
+            let index = episode * 129 + time - frames + slot;
+            let mut raw = vec![0u8; TOKENS * 8];
+            tokens_file
+                .seek(SeekFrom::Start((index * TOKENS * 8) as u64))
+                .expect("seek tokens");
+            tokens_file.read_exact(&mut raw).expect("read tokens");
+            let values: Vec<i64> = raw
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|bytes| i64::from_le_bytes(*bytes))
+                .collect();
+            if slot == frames - 1 {
+                targets.extend_from_slice(&values);
+                seq.extend(std::iter::repeat_n(args.mask, TOKENS));
+            } else {
+                seq.extend_from_slice(&values);
+                targets.extend(std::iter::repeat_n(args.mask, TOKENS));
+            }
+            // Actions are per episode, one per transition frame i -> i+1.
+            // Frame `index` is global (episode*129 + local), so recover the
+            // local frame and read the action that produced it, if any.
+            let local_frame = index - episode * 129;
+            let mut raw_action = [0u8; 1];
+            if local_frame >= 1 {
+                actions_file
+                    .seek(SeekFrom::Start((episode * 128 + local_frame - 1) as u64))
+                    .expect("seek actions");
+                actions_file
+                    .read_exact(&mut raw_action)
+                    .expect("read action");
+            }
+            acts.push(raw_action[0] as i64);
+        }
+    }
+    (
+        Tensor::<3, Int>::from_data(TensorData::new(seq, [args.batch, frames, TOKENS]), device),
+        Tensor::<2, Int>::from_data(TensorData::new(acts, [args.batch, frames]), device),
+        Tensor::<3, Int>::from_data(
+            TensorData::new(targets, [args.batch, frames, TOKENS]),
+            device,
+        ),
+    )
 }
 
 /// One-off: rewrite a record saved by the enum wrapper into the inner

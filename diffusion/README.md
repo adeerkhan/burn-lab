@@ -528,6 +528,88 @@ is not part of any reported result here: the scoring pass was stopped before it
 finished and it would not have changed a decision. It is published for
 completeness, clearly marked optional.
 
+## A world model: dreaming a room
+
+Ported from [`avbiswas/computer_vision_recipes`](https://github.com/avbiswas/computer_vision_recipes),
+`world_model/lightroom/`. The idea is not image quality — it is **agency**: a
+model that predicts the next frame from the last few frames *and your action*,
+so you can drive inside its dream. A playable world is a different test of a
+generative model than a static sample.
+
+```
+real room -> frames + actions -> VQ-VAE -> 16x16 codes -> dynamics -> next codes -> decode -> pixels
+```
+
+### The pipeline, and what each part does
+
+1. **Environment.** `scripts/world_env.py` is a small FireflyRoom: 2-3 fixed
+   boxes, a flashlight with tank controls, exact 2D ray casting for shadows, and
+   1-2 fireflies that wander and bounce. 400 episodes of 129 frames at 64x64
+   were recorded with a scripted driver (30% stay, 35% forward, the rest turn).
+2. **Tokenizer.** `world_vq.rs`: a VQ-VAE compresses each frame to a 16x16 grid
+   of code ids. The encoder has three stride-2/1x1 stages; the decoder mirrors
+   it with transposed convolutions. A codebook of K vectors is updated by the
+   **EMA of the encoder outputs assigned to each code**, and dead codes are
+   restarted from random vectors in the batch. Loss: L1 + MSE reconstruction, an
+   L1 edge loss, and 0.25x commitment. The reference tried a GAN critic and
+   removed it because it went unstable; this port follows that finding.
+3. **Tokenise once.** `world-encode` writes a flat i64 file of codes (101 MB);
+   the dynamics model never sees pixels.
+4. **Dynamics.** `world_model.rs`: a small Genie-style transformer. Each frame
+   is `code embedding + position in the 16x16 grid + frame slot + the action
+   that produced it`. Each block has two attentions: **spatial** (all 256 tokens
+   of a frame attend to each other) and **temporal** (each grid cell attends to
+   the same cell in earlier frames, causally). Training masks a random fraction
+   of tokens (MaskGIT) and corrupts a few context tokens so the model learns to
+   survive its own mistakes at rollout time. The reference's 3D RoPE and anchor
+   frame are not in this small port; learned positions are used instead.
+5. **Dream.** `world-dream` warms up from real frames, then feeds the model its
+   own predicted tokens and compares the decoded frames with the real room
+   under the same actions. That is where drift shows up.
+
+### Commands
+
+```sh
+python3 scripts/world_env.py --episodes 400 --steps 128
+python3 scripts/world_tokenize.py
+cargo run -p diffusion --release -- world-vq --backend wgpu \
+    --steps 8000 --batch 8 --dim 48 --timesteps 256 --out /tmp/world/vq
+cargo run -p diffusion --release -- world-encode --backend wgpu \
+    --ckpt /tmp/world/vq
+cargo run -p diffusion --release -- world-train --backend wgpu \
+    --steps 2000 --batch 8 --dim 64 --depth 2 --heads 4 --out /tmp/world/wm
+cargo run -p diffusion --release -- world-dream --backend wgpu \
+    --steps 60 --ckpt /tmp/world/wm --eval-data /tmp/world/vq
+```
+
+### What actually happened
+
+| Stage | Result |
+| --- | --- |
+| Recorded data | 400 x 129 frames, 64x64, 634 MB flat u8 + 51 KB actions |
+| Tokenizer, K=64, 1,500 steps | rec loss ~0.3; dream MAE 31.7 / 36.9 / 40.2 (steps 1-10 / 11-30 / 31+) |
+| Tokenizer, K=256, 8,000 steps | rec loss ~0.15, 73 s, peak 1.6 GB |
+| Dynamics, 2,000 steps | loss 4.29 -> 0.12, 41 s |
+| Dream, K=256 | MAE 36.7 / 45.3 / 44.5 — structured but blurry |
+
+![Real room and dream side by side](../docs/world-dream.webp)
+
+The dream moves the flashlight, boxes and fireflies in roughly the right
+places, but every frame is soft. **The bottleneck is the tokenizer, not the
+dynamics**: 16x16 codes at 64x64 mean each token carries a 4x4 pixel patch, and
+a dim-48 codebook trained for 73 s cannot hold sharp edges. The reference needed
+a much longer tokenizer run and 9.8M-parameter dynamics for its playable dream.
+
+Three real bugs were found and fixed while building this: EMA codebook tensors
+must be detached before becoming parameters; nearest-code assignment used
+`argmax` on squared distances (assigning each vector to its *farthest* code),
+which made reconstruction blow up from 0.3 to 10; and the dynamics head had the
+code count hard-coded to 64, silently breaking when the tokenizer used 256.
+
+This is a working miniature of the whole idea, not a playable dream. To get
+there: train the tokenizer for much longer, add 3D RoPE and the anchor frame,
+and feed back the model's own predictions over a longer schedule.
+
 ## Verification
 
 `tests/parity.rs` compares against numbers extracted from the reference source

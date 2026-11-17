@@ -11,3 +11,5 @@ pub mod test_support;
 pub mod unet;
 pub mod vit;
 pub mod vit_classifier;
+pub mod world_model;
+pub mod world_vq;

@@ -164,6 +164,15 @@ rollout invalid, every advantage zero) and a capability ceiling (nothing left to
 narrow band between them responds. The reference's checkpoint landed inside it; ours did not, and the
 write-up shows why. Full tables and the negative replication are in [`glm53/README.md`](glm53/README.md).
 
+### A miniature world model
+
+A second new workload in `diffusion/`: record a FireflyRoom (flashlight, boxes,
+wandering fireflies), tokenize frames to 16x16 integer codes with a VQ-VAE,
+predict the next frame's codes with an action-conditioned spatio-temporal
+transformer, and roll out a dream. All stages train in minutes here; the dream
+moves the objects correctly but is limited by tokenizer blur. See
+[`diffusion/README.md`](diffusion/README.md).
+
 ## Repository layout
 
 ```
