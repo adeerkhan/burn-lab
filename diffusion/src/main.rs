@@ -154,6 +154,8 @@ struct Options {
     solver: String,
     consistency_delta: f32,
     delta_schedule: String,
+    world_noise: f32,
+    clean_p: f32,
 }
 
 impl Default for Options {
@@ -193,6 +195,8 @@ impl Default for Options {
             solver: "midpoint".to_string(),
             consistency_delta: 1e-3,
             delta_schedule: "constant".to_string(),
+            world_noise: 0.1,
+            clean_p: 0.5,
         }
     }
 }
@@ -251,6 +255,8 @@ impl Options {
                     options.consistency_delta = value().parse().expect("consistency delta")
                 }
                 "--delta-schedule" => options.delta_schedule = value(),
+                "--world-noise" => options.world_noise = value().parse().expect("world noise"),
+                "--clean-p" => options.clean_p = value().parse().expect("clean probability"),
                 "--attention" => {
                     options.attention = value()
                         .split(',')
@@ -724,6 +730,8 @@ fn train_world_model(options: &Options) {
                 batch: options.batch,
                 context: config.context,
                 seed: options.seed + step as u64,
+                noise: options.world_noise,
+                clean_p: options.clean_p,
             },
             &device,
         );
@@ -795,6 +803,10 @@ fn dream_rollout(options: &Options) {
 
     let context = wm_config.context;
     let steps = options.steps.max(1);
+    // Use the actions that were actually recorded, so the real room and the
+    // dream get the same key presses. Random actions would make the comparison
+    // meaningless: the real frames come from a scripted driver.
+    let recorded = std::fs::read(format!("{prefix}/actions.bin")).expect("read actions");
     let mut history: Vec<Tensor<1, Int>> = Vec::new();
     let mut actions: Vec<i64> = Vec::new();
     for time in 0..context {
@@ -802,12 +814,12 @@ fn dream_rollout(options: &Options) {
         let ids = vq.ids(vq.encode(frame)).reshape([TOKENS]);
         history.push(ids);
         if time > 0 {
-            actions.push(diffusion::data::Rng::new(options.seed + time as u64).below(5) as i64);
+            actions.push(recorded[time - 1] as i64);
         }
     }
     let mut errors = Vec::new();
     for step in 0..steps {
-        let action = diffusion::data::Rng::new(options.seed + 1000 + step as u64).below(5) as i64;
+        let action = recorded[context + step - 1] as i64;
         actions.push(action);
         let seq = Tensor::<3, Int>::from_data(
             TensorData::new(
@@ -842,8 +854,9 @@ fn dream_rollout(options: &Options) {
             .into_scalar::<f32>();
         errors.push(error * 127.5);
 
-        // [real | dream] strip for one image per 10 steps.
-        if step % 10 == 0 {
+        // [real | dream] strip, one frame per `checkpoint_every` steps.
+        let stride = options.checkpoint_every.max(1);
+        if step % stride == 0 {
             let strip = Tensor::cat(vec![real_frame, dream.clone()], 3);
             save_samples(strip, &format!("{}/step-{step:04}.png", options.out));
         }
@@ -874,6 +887,8 @@ struct WorldBatchArgs<'a> {
     batch: usize,
     context: usize,
     seed: u64,
+    noise: f32,
+    clean_p: f32,
 }
 
 fn world_batch(
@@ -905,12 +920,26 @@ fn world_batch(
                 .iter()
                 .map(|bytes| i64::from_le_bytes(*bytes))
                 .collect();
-            if slot == frames - 1 {
-                targets.extend_from_slice(&values);
-                seq.extend(std::iter::repeat_n(args.mask, TOKENS));
+            // MaskGIT on every frame, as the reference does: half the time
+            // hide the whole frame, otherwise hide a random fraction. Targets
+            // are always the real codes. Context tokens that are not hidden
+            // can be replaced with a random code, teaching the model to cope
+            // with its own imperfect rollouts.
+            let ratio = if rng.unit() < args.clean_p {
+                1.0
             } else {
-                seq.extend_from_slice(&values);
-                targets.extend(std::iter::repeat_n(args.mask, TOKENS));
+                rng.unit() * 0.7
+            };
+            let noisy_context = slot + 1 < frames && rng.unit() < args.noise * 10.0;
+            for value in values {
+                if rng.unit() < ratio {
+                    seq.push(args.mask);
+                } else if noisy_context && rng.unit() < args.noise {
+                    seq.push(rng.below(args.mask as usize) as i64);
+                } else {
+                    seq.push(value);
+                }
+                targets.push(value);
             }
             // Actions are per episode, one per transition frame i -> i+1.
             // Frame `index` is global (episode*129 + local), so recover the

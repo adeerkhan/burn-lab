@@ -170,7 +170,9 @@ A second new workload in `diffusion/`: record a FireflyRoom (flashlight, boxes,
 wandering fireflies), tokenize frames to 16x16 integer codes with a VQ-VAE,
 predict the next frame's codes with an action-conditioned spatio-temporal
 transformer, and roll out a dream. All stages train in minutes here; the dream
-moves the objects correctly but is limited by tokenizer blur. See
+moves the objects correctly but is limited by tokenizer blur — see the
+[10-second clip](docs/world-dream.mp4). Training on the model's own mistakes
+cut the first-10-step dream error from 36.7 to 25.1. See
 [`diffusion/README.md`](diffusion/README.md).
 
 ## Repository layout

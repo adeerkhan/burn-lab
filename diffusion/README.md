@@ -594,6 +594,12 @@ cargo run -p diffusion --release -- world-dream --backend wgpu \
 
 ![Real room and dream side by side](../docs/world-dream.webp)
 
+The 10-second clip is in [`docs/world-dream.mp4`](../docs/world-dream.mp4)
+(and a looping GIF beside it). Both rooms get the **recorded** actions from the
+same episode, so the comparison is fair; the first version of this used random
+actions for the dream while the real frames came from a scripted driver, which
+made the error numbers meaningless.
+
 The dream moves the flashlight, boxes and fireflies in roughly the right
 places, but every frame is soft. **The bottleneck is the tokenizer, not the
 dynamics**: 16x16 codes at 64x64 mean each token carries a 4x4 pixel patch, and
@@ -605,6 +611,32 @@ must be detached before becoming parameters; nearest-code assignment used
 `argmax` on squared distances (assigning each vector to its *farthest* code),
 which made reconstruction blow up from 0.3 to 10; and the dynamics head had the
 code count hard-coded to 64, silently breaking when the tokenizer used 256.
+
+### What is different from the reference
+
+| Reference | Here | Why |
+| --- | --- | --- |
+| PyTorch + accelerate, mmap `.npy` | Burn + flat u8/i64 files with `seek` | same data, no Python in the training loop |
+| VQ-VAE K=512, D=64, 20k steps | K=256, D=48, 8k steps | fits the time and memory budget |
+| Genie transformer, d=384, 8 layers, 9.8M params | d=64, 2 layers, ~1M params | trains in 41 s |
+| Strided context (32,16,8,4,3,2,1,0) + anchor | 4 dense recent frames | simpler; strided context needs its own sampler |
+| 3D RoPE over (row, col, time) | learned grid/frame embeddings | Burn's RoPE is available but not wired here |
+| One-pass or multi-pass MaskGIT play | one-pass argmax | enough to measure drift |
+| Interactive pygame player, MP4 export | offline rollout + ffmpeg video | no display needed; video generated from recorded actions |
+
+The ingredient we did keep, and which mattered most in the reference, is
+**training on the model's own mistakes**: MaskGIT masking on every frame plus
+randomly corrupted context tokens. Adding it here (the first version omitted
+both, and predicted the mask code for context frames) changed the dream error:
+
+| Dynamics training | Steps 1-10 | 11-30 | 31+ |
+| --- | ---: | ---: | ---: |
+| Mask only the target frame | 36.7 | 44.5 | 45.0 |
+| Mask every frame + corrupt context | **25.1** | **35.1** | 46.2 |
+
+One-step prediction improved by 32%; the later drift is still there, which is
+expected — the tokenizer's blur compounds over a long rollout. This is the
+single most useful thing learned from porting this project.
 
 This is a working miniature of the whole idea, not a playable dream. To get
 there: train the tokenizer for much longer, add 3D RoPE and the anchor frame,
