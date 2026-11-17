@@ -265,15 +265,14 @@ impl WorldModel {
         self.forward_full(seq, actions).0
     }
 
-    /// Predict the next frame's codes and a per-token probability that each
-    /// token changed relative to the last context frame. The probability lets
-    /// callers blend the copy and new codes in latent space instead of making
-    /// a hard switch, which is much more forgiving of a wrong new code.
-    pub fn predict_detail(
+    /// One decoding pass with a given (possibly partially revealed) target
+    /// frame. Returns new codes, change probabilities and token confidences.
+    fn predict_pass(
         &self,
-        seq: Tensor<3, Int>,
-        actions: Tensor<2, Int>,
-    ) -> (Tensor<2, Int>, Tensor<2>) {
+        seq: &Tensor<3, Int>,
+        actions: &Tensor<2, Int>,
+        target: Option<&Tensor<2, Int>>,
+    ) -> (Tensor<2, Int>, Tensor<2>, Tensor<2>) {
         let device = seq.device();
         let [batch, frames, _] = seq.dims();
         let codes = self.config.codes;
@@ -284,19 +283,28 @@ impl WorldModel {
             .convert::<i64>()
             .try_to_vec::<i64>()
             .unwrap();
+        let target_values = match target {
+            Some(t) => t
+                .clone()
+                .into_data()
+                .convert::<i64>()
+                .try_to_vec::<i64>()
+                .unwrap(),
+            None => vec![mask; batch * TOKENS],
+        };
         let mut values = Vec::with_capacity(batch * (frames + 1) * TOKENS);
-        let target = vec![mask; batch * TOKENS];
         for index in 0..batch {
             values.extend_from_slice(
                 &context_values[index * frames * TOKENS..(index + 1) * frames * TOKENS],
             );
-            values.extend_from_slice(&target[index * TOKENS..(index + 1) * TOKENS]);
+            values.extend_from_slice(&target_values[index * TOKENS..(index + 1) * TOKENS]);
         }
         let full = Tensor::<3, Int>::from_data(
             TensorData::new(values, [batch, frames + 1, TOKENS]),
             &device,
         );
         let mut acts = actions
+            .clone()
             .into_data()
             .convert::<i64>()
             .try_to_vec::<i64>()
@@ -305,15 +313,12 @@ impl WorldModel {
         let actions_full =
             Tensor::<2, Int>::from_data(TensorData::new(acts, [batch, frames + 1]), &device);
         let (logits, change_logits) = self.forward_full(full, actions_full);
-        let new_codes = logits
-            .narrow(1, frames, 1)
-            .reshape([batch * TOKENS, codes])
-            .argmax(1)
-            .reshape([batch, TOKENS])
-            .into_data()
-            .convert::<i64>()
-            .try_to_vec::<i64>()
-            .unwrap();
+        let target_logits = logits.narrow(1, frames, 1).reshape([batch * TOKENS, codes]);
+        let probabilities = activation::softmax(target_logits.clone(), 1);
+        let new_codes = target_logits.argmax(1).reshape([batch * TOKENS]);
+        let confidence = probabilities
+            .gather(1, new_codes.clone().reshape([-1, 1]))
+            .reshape([batch * TOKENS]);
         let change = change_logits
             .narrow(1, frames, 1)
             .reshape([batch * TOKENS])
@@ -321,61 +326,100 @@ impl WorldModel {
             .convert::<f32>()
             .try_to_vec::<f32>()
             .unwrap();
-        let probs: Vec<f32> = change.iter().map(|x| 1.0 / (1.0 + (-x).exp())).collect();
+        let change_probs: Vec<f32> = change.iter().map(|x| 1.0 / (1.0 + (-x).exp())).collect();
         (
-            Tensor::<2, Int>::from_data(TensorData::new(new_codes, [batch, TOKENS]), &device),
-            Tensor::<2>::from_data(TensorData::new(probs, [batch, TOKENS]), &device),
+            new_codes.reshape([batch, TOKENS]),
+            Tensor::<2>::from_data(TensorData::new(change_probs, [batch, TOKENS]), &device),
+            confidence.reshape([batch, TOKENS]),
         )
     }
 
-    /// Hard switch: use the new code where the change probability crosses the
-    /// threshold, otherwise copy the last context frame's code.
-    pub fn predict_with_threshold(
+    /// Predict the next frame's codes and a per-token probability that each
+    /// token changed relative to the last context frame.
+    pub fn predict_detail(
         &self,
         seq: Tensor<3, Int>,
         actions: Tensor<2, Int>,
-        threshold: f32,
-    ) -> Tensor<2, Int> {
-        let device = seq.device();
-        let [batch, frames, _] = seq.dims();
-        let context_values = seq
-            .clone()
-            .into_data()
-            .convert::<i64>()
-            .try_to_vec::<i64>()
-            .unwrap();
-        let (codes, probs) = self.predict_detail(seq, actions);
-        if !self.config.residual {
-            return codes;
+    ) -> (Tensor<2, Int>, Tensor<2>) {
+        let (codes, probs, _) = self.predict_pass(&seq, &actions, None);
+        (codes, probs)
+    }
+
+    /// Iterative MaskGIT decoding. Start with every target token masked, then
+    /// on each pass commit the most confident still-masked tokens and re-run.
+    /// One pass reduces to plain argmax; more passes sharpen stochastic
+    /// fireflies and beam edges without retraining.
+    pub fn predict_multipass(
+        &self,
+        seq: Tensor<3, Int>,
+        actions: Tensor<2, Int>,
+        passes: usize,
+    ) -> (Tensor<2, Int>, Tensor<2>) {
+        let passes = passes.max(1);
+        if passes == 1 {
+            return self.predict_detail(seq, actions);
         }
-        let codes = codes
-            .into_data()
-            .convert::<i64>()
-            .try_to_vec::<i64>()
-            .unwrap();
-        let probs = probs
-            .into_data()
-            .convert::<f32>()
-            .try_to_vec::<f32>()
-            .unwrap();
-        let mut predicted = Vec::with_capacity(batch * TOKENS);
-        for item in 0..batch {
-            let start = (item * frames + frames - 1) * TOKENS;
-            let copy = &context_values[start..start + TOKENS];
-            for (token, copy_code) in copy.iter().enumerate() {
-                let flat = item * TOKENS + token;
-                predicted.push(if probs[flat] > threshold {
-                    codes[flat]
-                } else {
-                    *copy_code
-                });
+        let device = seq.device();
+        let batch = seq.dims()[0];
+        let mask = self.config.codes as i64;
+        let mut target = vec![mask; batch * TOKENS];
+        let mut codes = vec![0i64; batch * TOKENS];
+        let mut change_probs = vec![0f32; batch * TOKENS];
+        for pass in 1..=passes {
+            let target_tensor = Tensor::<2, Int>::from_data(
+                TensorData::new(target.clone(), [batch, TOKENS]),
+                &device,
+            );
+            let (new_codes, probs, confidence) =
+                self.predict_pass(&seq, &actions, Some(&target_tensor));
+            codes = new_codes
+                .into_data()
+                .convert::<i64>()
+                .try_to_vec::<i64>()
+                .unwrap();
+            change_probs = probs
+                .into_data()
+                .convert::<f32>()
+                .try_to_vec::<f32>()
+                .unwrap();
+            if pass == passes {
+                break;
+            }
+            // Cosine schedule: the fraction still masked after pass i is
+            // cos(i*pi/(2*passes)). Reveal the top-confidence tokens needed to
+            // move from this pass's ratio to the next one's.
+            let now = (pass as f32 * std::f32::consts::PI / (2.0 * passes as f32))
+                .cos()
+                .max(0.0);
+            let next = ((pass + 1) as f32 * std::f32::consts::PI / (2.0 * passes as f32))
+                .cos()
+                .max(0.0);
+            let fraction = ((now - next) / now.max(1e-6)).min(1.0);
+            let conf = confidence
+                .into_data()
+                .convert::<f32>()
+                .try_to_vec::<f32>()
+                .unwrap();
+            for item in 0..batch {
+                let mut masked: Vec<(f32, usize)> = (0..TOKENS)
+                    .filter(|&i| target[item * TOKENS + i] == mask)
+                    .map(|i| (conf[item * TOKENS + i], i))
+                    .collect();
+                let count = (fraction * masked.len() as f32).ceil() as usize;
+                masked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+                for &(_, index) in masked.iter().take(count) {
+                    target[item * TOKENS + index] = codes[item * TOKENS + index];
+                }
             }
         }
-        Tensor::<2, Int>::from_data(TensorData::new(predicted, [batch, TOKENS]), &device)
+        (
+            Tensor::<2, Int>::from_data(TensorData::new(codes, [batch, TOKENS]), &device),
+            Tensor::<2>::from_data(TensorData::new(change_probs, [batch, TOKENS]), &device),
+        )
     }
 
     pub fn predict(&self, seq: Tensor<3, Int>, actions: Tensor<2, Int>) -> Tensor<2, Int> {
-        self.predict_with_threshold(seq, actions, 0.0)
+        self.predict_detail(seq, actions).0
     }
 }
 

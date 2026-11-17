@@ -720,6 +720,29 @@ what makes a residual target trainable at all. The remaining lever is to train
 the residual head directly against pixel differences instead of a binary
 code-change flag.
 
+### Iterative MaskGIT decoding
+
+`--passes` replaces one-pass argmax with the reference's iterative decoding:
+start with all 256 target tokens masked, then on each pass commit the most
+confident still-masked tokens and re-run, with a cosine schedule for how many
+to reveal. No retraining is needed. It sharpens the firefly cores slightly and
+reduces late drift, though the effect is small because the residual head has
+already decided that most tokens should not change:
+
+| Passes | One-step MAE | 120-step: 1-10 / 11-30 / 31+ |
+| ---: | ---: | --- |
+| 1 | **3.73** | 21.61 / 36.42 / 42.56 |
+| 2 | 3.91 | — |
+| 4 (default) | 3.96 | 21.64 / 36.33 / **42.21** |
+| 8 | 3.96 | — |
+
+Iterative decoding trades a little one-step accuracy for better long-rollout
+coherence, which is what a dream needs. It cannot fix the dominant blur: each
+token still covers a 4x4 pixel patch, so the tokenizer, not the decoder, is the
+visual ceiling. The sharper levers are a longer K=512 tokenizer, a grid of 32
+(2x2 pixel patches), a detail decoder, or factorising the static box layout out
+of the prediction target.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer

@@ -159,6 +159,7 @@ struct Options {
     residual: bool,
     change_threshold: f32,
     delta_scale: f32,
+    passes: usize,
 }
 
 impl Default for Options {
@@ -203,6 +204,7 @@ impl Default for Options {
             residual: false,
             change_threshold: 0.0,
             delta_scale: 0.5,
+            passes: 4,
         }
     }
 }
@@ -266,6 +268,7 @@ impl Options {
                     options.change_threshold = value().parse().expect("change threshold")
                 }
                 "--delta-scale" => options.delta_scale = value().parse().expect("delta scale"),
+                "--passes" => options.passes = value().parse().expect("pass count"),
                 "--world-noise" => options.world_noise = value().parse().expect("world noise"),
                 "--clean-p" => options.clean_p = value().parse().expect("clean probability"),
                 "--attention" => {
@@ -893,7 +896,7 @@ fn world_ceiling(options: &Options) {
             &device,
         );
         let acts = Tensor::<2, Int>::from_data(TensorData::new(acts, [1, context]), &device);
-        let (new_ids, probs) = wm.predict_detail(seq, acts);
+        let (new_ids, probs) = wm.predict_multipass(seq, acts, options.passes);
         let real = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
         let previous = world_frame_at(&format!("{prefix}/frames.bin"), episode, time - 1, &device);
         let dream = decode_world_prediction(
@@ -1050,7 +1053,7 @@ fn dream_rollout(options: &Options) {
             TensorData::new(actions.clone(), [1, actions.len()]),
             &device,
         );
-        let (new_ids, probs) = wm.predict_detail(seq, acts);
+        let (new_ids, probs) = wm.predict_multipass(seq, acts, options.passes);
         let dream = decode_world_prediction(
             &vq,
             &wm,
