@@ -481,17 +481,14 @@ fn classify(options: &Options) {
         }
     }
 
-    // Held-out accuracy in batches, never materialising all images at once.
+    // Exact held-out accuracy: walk every image once, in order, in batches.
+    // Nothing is sampled with replacement and the full split is never in RAM.
     let total = held.len();
     let mut correct = 0usize;
     let mut done = 0usize;
-    let mut seed = options.seed + 777;
     while done < total {
         let count = options.batch.min(total - done);
-        // The loader samples randomly; a fixed-size pass over held data is
-        // approximate but unbiased enough for a progress report.
-        let (images, labels) = held.batch(count, seed, &device);
-        seed = seed.wrapping_add(1);
+        let (images, labels) = held.sequential_batch(done, count, &device);
         let predicted = model.forward(images).argmax(1).reshape([count, 1]);
         let actual = labels.reshape([count, 1]);
         let hits = predicted

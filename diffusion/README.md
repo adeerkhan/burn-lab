@@ -156,9 +156,12 @@ samples against the 3,303 training images:
 | Feature space | Model | Real held-out vs train (floor) |
 | --- | ---: | ---: |
 | Inception 2048-d | 186.86 | not computable (367 held-out < 2048) |
-| Inception 256-d PCA | 150.55 | **19.23** |
+| Inception 256-d PCA, 2,304-sample draw | 150.55 | 19.23 |
+| Inception 256-d PCA, 512-sample draw | 151.04 | **17.79** |
 
-In a feature space that sees detail, the model is **7.8x the floor**; in the 8x8
+The two projected rows use different draw sizes, which also moves the real-vs-real
+floor; they are not comparable with each other, only the same-row floor ratio is.
+In a feature space that sees detail, the model is about **8x the floor**; in the 8x8
 pixel space it is **1.07x**. Both are true statements about the same samples: the
 pixel estimator measures coarse colour and layout, which the model has learned,
 and stops there. **3.170 is not Inception FID 3.170**, and nothing here should be
@@ -243,7 +246,7 @@ Three things to take away:
 Two measurements point at the same problem:
 
 - **The gap is structure, not colour.** The 8x8 pixel estimator says the model
-  is 1.07x its floor; Inception space says **7.8x**. Pooling to 8x8 discards
+  is 1.07x its floor; Inception space says about **8x**. Pooling to 8x8 discards
   texture and object parts, which is exactly where the samples are weak: the
   colour statistics are right and the shapes are mush.
 - **The model overfits 3,303 images.** From 24k to 48k steps the training loss
@@ -296,17 +299,19 @@ cargo run -p diffusion --release -- reflow --backend wgpu \
     --steps 6000 --batch 16 --out /tmp/reflow
 ```
 
-6,000 steps on 2,048 cached pairs, 1,077.5 s. 512 samples per draw, one draw per
+6,000 steps. The saved checkpoint uses 8,192 cached pairs; the smaller-cache
+row below is retained from the first pass. 512 samples per draw, one draw per
 row:
 
 | ODE steps | 1 | 2 | 4 | 10 | 20 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | base flow | 24.967 | 11.237 | — | 3.264 | **3.170** |
-| **reflow** | **4.418** | **4.360** | **4.191** | 3.625 | 3.745 |
+| reflow, 2,048 pairs | 4.418 | 4.360 | 4.191 | 3.625 | 3.745 |
+| **reflow, 8,192 pairs** | **4.079** | **4.210** | **3.891** | 3.760 | 3.852 |
 
-**At one step reflow is 5.6x better**: 4.418 against 24.967, which is the
+**At one step reflow is 6.1x better**: 4.079 against 24.967, which is the
 difference between a flower and a colour smear. The price is the asymptotic end:
-at twenty steps the base model is still ahead, 3.170 against 3.745, because
+at twenty steps the base model is still ahead, 3.170 against 3.852, because
 straightening the path trades a little of the fine detail the curved path was
 carrying. That is the trade the paper describes, measured on the same estimator
 as everything else here.
@@ -489,9 +494,10 @@ cargo run -p diffusion --release -- classify --backend wgpu \
 | first streaming loader | 600 | 0.223 | 1.95 GB |
 | interleaved-RGB planes fixed (`GLM-041`) | 600 | 0.247 | 379 MB |
 | residual scale 0.1, mean pooling | 1000 | **0.324** | 463 MB |
-| same, 1500 steps | 1500 | **0.376** | 427 MB |
-| larger model (`dim 96`, depth 6) | 2000 | 0.327 | 1.46 GB |
-| CLS token instead of mean pooling | 2000 | 0.280 | 1.76 GB |
+| same, 1500 steps (sampled estimate) | 1500 | 0.376 | 427 MB |
+| exact pass, three runs | 1500 | **0.329 +- 0.027** | 368 MB |
+| larger model (`dim 96`, depth 6, sampled) | 2000 | 0.327 | 1.46 GB |
+| CLS token instead of mean pooling (sampled) | 2000 | 0.280 | 1.76 GB |
 
 What the process showed:
 
@@ -501,13 +507,26 @@ What the process showed:
   also cut peak memory from 1.95 GB to 379 MB.
 - **Mean pooling beat a CLS token here**, and used a quarter of the memory. The
   extra token and concatenation cost 1.76 GB for 28% accuracy. Reverted.
-- **Bigger was worse.** `dim 96`, depth 6 reached 33% with 1.46 GB, against
-  37.6% with the small model at 427 MB. With 3,303 training images the larger
-  model just overfits.
-- **The remaining gap is data fidelity, not architecture.** 37.6% on five
+- **Bigger was worse.** `dim 96`, depth 6 reached 33% (sampled estimate) with
+  1.46 GB, against 32.9% +- 2.7% exact for the small model at 368 MB. With 3,303
+  training images the larger model just overfits.
+- **The first accuracy estimate was optimistic.** It drew held-out batches with
+  replacement (368 draws over 364 images) instead of walking the split once.
+  The exact pass gives three runs of 0.335, 0.299 and 0.352, mean **0.329 +- 0.027**
+  — about five points lower, with the usual wgpu run-to-run spread.
+- **The remaining gap is data fidelity, not architecture.** 33% on five
   classes after 24 seconds is a workable sanity check, not a good classifier;
   the flowers are small, overlapping classes and the model sees each image only
   a few times.
+
+### Optional LPIPS scoring
+
+`scripts/lpips_score.py` scores samples with VGG16 relu4_3 features, the layer
+LPIPS uses. It needs the pretrained VGG16 weights at
+`/home/adeerkhan/tmp/vgg16.pth` (528 MB, download from PyTorch's model zoo), and
+is not part of any reported result here: the scoring pass was stopped before it
+finished and it would not have changed a decision. It is published for
+completeness, clearly marked optional.
 
 ## Verification
 

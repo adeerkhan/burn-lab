@@ -103,8 +103,8 @@ Four things were fixed by measuring rather than guessing, and each is written up
   it produced was the estimator failing, not the model; every number here uses 256 or 512 samples.
 - **A real-image floor** was measured before the 4.0 target was accepted (2.957 ± 0.234), so the
   target meant something.
-- **The metric is not Inception FID.** In Inception-v3 space with a measured real-image floor (19.23
-  at 256 projected dimensions), the flow model scores 150.55 — **7.8× the floor**, where the pixel
+- **The metric is not Inception FID.** In Inception-v3 space with a measured real-image floor (17.79
+  at 256 projected dimensions), the flow model scores 151.04 — **8.5× the floor**, where the pixel
   estimator says 1.07×. The 8×8 metric measures coarse colour and layout; nothing here is comparable
   with a paper's FID.
 - **Consistency flow matching did not work here.** Trained at the same budget it scores 26.06 at one
@@ -118,16 +118,16 @@ Four things were fixed by measuring rather than guessing, and each is written up
 - **128×128 costs more than it gives at fixed compute.** Same 112k-image budget: 6.450 against
   64×64's 3.170 on the coarse estimator, whose floor is identical at both resolutions (2.945 vs
   2.957) because 8×8 pooling discards detail.
-- **The metric is not Inception FID.** In Inception-v3 space with a measured real-image floor (19.23
-  at 256 projected dimensions), the flow model scores 150.55 — **7.8× the floor**, where the pixel
+- **The metric is not Inception FID.** In Inception-v3 space with a measured real-image floor (17.79
+  at 256 projected dimensions), the flow model scores 151.04 — **8.5× the floor**, where the pixel
   estimator says 1.07×. The 8×8 metric measures coarse colour and layout; nothing here is comparable
   with a paper's FID.
 
 ### Flower classification, briefly
 
 The ViT was also tried on five-class flower classification with a streaming
-64×64 u8 loader: peak RSS **439 MB**, 16 s for 1,000 steps, and **37.6%** held-out
-accuracy after 1,500 steps against 20% chance. A CLS token and a larger model
+64×64 u8 loader: peak RSS **439 MB**, 16 s for 1,000 steps, and **32.9% +- 2.7%** exact held-out
+accuracy over three runs at 1,500 steps against 20% chance. A CLS token and a larger model
 were both worse and used 4x the memory; mean pooling and a small model won.
 See [`diffusion/README.md`](diffusion/README.md) for the review trail.
 

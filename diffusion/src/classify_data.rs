@@ -37,6 +37,46 @@ impl LabeledImages {
         self.count == 0
     }
 
+    /// A deterministic batch of consecutive images, for exact held-out evaluation.
+    pub fn sequential_batch(
+        &mut self,
+        start: usize,
+        batch: usize,
+        device: &Device,
+    ) -> (Tensor<4>, Tensor<2, Int>) {
+        let stride = 3 * self.size * self.size;
+        let batch = batch.min(self.count.saturating_sub(start));
+        let mut pixels = Vec::with_capacity(batch * stride);
+        let mut classes = Vec::with_capacity(batch);
+
+        self.images
+            .seek(SeekFrom::Start((start * stride) as u64))
+            .expect("seek the image file");
+        self.labels
+            .seek(SeekFrom::Start(start as u64))
+            .expect("seek the label file");
+        for _ in 0..batch {
+            let mut raw = vec![0u8; stride];
+            self.images.read_exact(&mut raw).expect("read one image");
+            let plane = self.size * self.size;
+            for channel in 0..3 {
+                for pixel in 0..plane {
+                    pixels.push(raw[3 * pixel + channel] as f32 / 127.5 - 1.0);
+                }
+            }
+            let mut label = [0u8; 1];
+            self.labels.read_exact(&mut label).expect("read one label");
+            classes.push(label[0] as i64);
+        }
+        (
+            Tensor::<4>::from_data(
+                TensorData::new(pixels, [batch, 3, self.size, self.size]),
+                device,
+            ),
+            Tensor::<2, Int>::from_data(TensorData::new(classes, [batch, 1]), device),
+        )
+    }
+
     /// One batch of images in `[-1, 1]` and their class ids.
     pub fn batch(
         &mut self,
