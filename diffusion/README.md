@@ -580,6 +580,8 @@ cargo run -p diffusion --release -- world-train --backend wgpu \
     --steps 2000 --batch 8 --dim 64 --depth 2 --heads 4 --out /tmp/world/wm
 cargo run -p diffusion --release -- world-dream --backend wgpu \
     --steps 60 --ckpt /tmp/world/wm --eval-data /tmp/world/vq
+cargo run -p diffusion --release -- world-ceiling --backend wgpu \
+    --steps 40 --ckpt /tmp/world/wm --eval-data /tmp/world/vq
 ```
 
 ### What actually happened
@@ -638,9 +640,36 @@ One-step prediction improved by 32%; the later drift is still there, which is
 expected — the tokenizer's blur compounds over a long rollout. This is the
 single most useful thing learned from porting this project.
 
+### Where the error really comes from
+
+`world-ceiling` scores all three predictors from the **same real context**, so
+drift cannot flatter or punish any of them (40 held-out samples, MAE on 0-255):
+
+| One-step predictor from real context | MAE |
+| --- | ---: |
+| Copy the last real frame | 3.45 |
+| VQ-VAE: encode then decode the real target | 5.67 |
+| World model: predict next codes from context + action | 9.07 |
+
+The honest reading: on a room that changes slowly (true consecutive-frame MAE
+is only 3.64), **copying the last frame beats our world model at one step**.
+The tokenization alone costs more error than the entire frame change. Over the
+full 120-step rollout the trivial baseline is MAE 22.2 / 36.8 / 46.9, against
+our dream's 25.1 / 35.1 / 46.2 — roughly the same. The model is learning the
+*shape* of the dynamics but is not yet adding measurable value over a trivial
+predictor. That is the real bar to clear, and it is why the next experiments
+should change *what* is predicted (residuals, or latent state), not just make
+the same transformer bigger.
+
+The reference publishes no MAE/PSNR table — only a showcase image and dream
+videos — so there is no honest head-to-head score. Qualitatively its dream is
+much crisper and stays coherent far longer, but it also had a far longer
+training run and ~10x the parameters.
+
 This is a working miniature of the whole idea, not a playable dream. To get
-there: train the tokenizer for much longer, add 3D RoPE and the anchor frame,
-and feed back the model's own predictions over a longer schedule.
+there: change the prediction target to residuals or latent state, train the
+tokenizer for much longer, add 3D RoPE and the anchor frame, and feed back the
+model's own predictions over a longer schedule.
 
 ## Verification
 

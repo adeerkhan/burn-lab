@@ -379,6 +379,7 @@ fn main() {
         "world-train" => train_world_model(&options),
         "world-encode" => encode_world_tokens(&options),
         "world-dream" => dream_rollout(&options),
+        "world-ceiling" => world_ceiling(&options),
         "make-pairs" => make_pairs(&options),
         other => panic!("unknown command `{other}`; see README for the command list"),
     }
@@ -764,6 +765,104 @@ fn train_world_model(options: &Options) {
         serde_json::to_string_pretty(&config).expect("serialise"),
     )
     .expect("write config");
+    leave_after_writing();
+}
+
+/// Separate the two sources of dream error: the tokenizer's reconstruction
+/// ceiling and the dynamics model's one-step prediction. Both are scored from
+/// REAL context, so drift does not contaminate the comparison.
+fn world_ceiling(options: &Options) {
+    let device = options.device();
+    let prefix = if options.data.is_empty() {
+        "/home/adeerkhan/tmp/world/data".to_string()
+    } else {
+        options.data.clone()
+    };
+    let checkpoints = if options.checkpoint.is_empty() {
+        "/home/adeerkhan/tmp/world/wm".to_string()
+    } else {
+        options.checkpoint.clone()
+    };
+    let vq_dir = if options.eval_data.is_empty() {
+        "/home/adeerkhan/tmp/world/vq".to_string()
+    } else {
+        options.eval_data.clone()
+    };
+    let wm_config: WorldConfig = serde_json::from_str(
+        &std::fs::read_to_string(format!("{checkpoints}/config.json")).expect("read world config"),
+    )
+    .expect("parse world config");
+    let vq_config: VqConfig = serde_json::from_str(
+        &std::fs::read_to_string(format!("{vq_dir}/config.json")).expect("read vq config"),
+    )
+    .expect("parse vq config");
+
+    let mut vq = VqVae::new(&vq_config, &device);
+    vq = vq.load_record(ModuleRecord::load(format!("{vq_dir}/model")).expect("load tokenizer"));
+    let mut wm = WorldModel::new(&wm_config, &device);
+    wm = wm
+        .load_record(ModuleRecord::load(format!("{checkpoints}/model")).expect("load world model"));
+
+    let recorded = std::fs::read(format!("{prefix}/actions.bin")).expect("read actions");
+    let context = wm_config.context;
+    let samples = options.steps.max(1);
+    let mut errors = (0.0f32, 0.0f32, 0.0f32);
+    for index in 0..samples {
+        let episode = index % 370;
+        let time = context + (index * 7) % (128 - context);
+        let mut ids = Vec::new();
+        let mut acts = Vec::new();
+        for slot in 0..context {
+            let frame = world_frame_at(
+                &format!("{prefix}/frames.bin"),
+                episode,
+                time - context + slot,
+                &device,
+            );
+            ids.push(vq.ids(vq.encode(frame)).reshape([TOKENS]));
+            // One action per context frame; the oldest has no known action.
+            if slot == 0 {
+                acts.push(5); // NO_ACTION
+            } else {
+                acts.push(recorded[episode * 128 + time - context + slot - 1] as i64);
+            }
+        }
+        let seq = Tensor::<3, Int>::from_data(
+            TensorData::new(
+                ids.iter()
+                    .flat_map(|id| {
+                        id.clone()
+                            .into_data()
+                            .convert::<i64>()
+                            .try_to_vec::<i64>()
+                            .unwrap()
+                    })
+                    .collect::<Vec<_>>(),
+                [1, context, TOKENS],
+            ),
+            &device,
+        );
+        let acts = Tensor::<2, Int>::from_data(TensorData::new(acts, [1, context]), &device);
+        let predicted = wm.predict(seq, acts).reshape([TOKENS, 1]);
+        let real = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
+        let previous = world_frame_at(&format!("{prefix}/frames.bin"), episode, time - 1, &device);
+        let dream = vq.decode_ids(predicted);
+        let real_tokens = vq.ids(vq.encode(real.clone())).reshape([TOKENS, 1]);
+        let recon = vq.decode_ids(real_tokens);
+        let mae = |a: &Tensor<4>, b: &Tensor<4>| {
+            a.clone().sub(b.clone()).abs().mean().into_scalar::<f32>() * 127.5
+        };
+        errors.0 += mae(&dream, &real);
+        errors.1 += mae(&recon, &real);
+        errors.2 += mae(&previous, &real);
+    }
+    let n = samples as f32;
+    println!(
+        "one-step MAE (0-255): world model {:.2}, VQ-VAE ceiling {:.2}, copy-last-frame {:.2}",
+        errors.0 / n,
+        errors.1 / n,
+        errors.2 / n
+    );
     leave_after_writing();
 }
 
