@@ -171,8 +171,10 @@ wandering fireflies), tokenize frames to 16x16 integer codes with a VQ-VAE,
 predict the next frame's codes with an action-conditioned spatio-temporal
 transformer, and roll out a dream. All stages train in minutes here; the dream
 moves the objects correctly but is limited by tokenizer blur — see the
-[10-second clip](docs/world-dream.mp4). Training on the model's own mistakes
-cut the first-10-step dream error from 36.7 to 25.1. See
+[10-second clip](docs/world-dream.mp4). Training on the model's own mistakes cut
+the first-10-step error from 36.7 to 25.1, and a pixel-anchored residual head
+that predicts only the *change* brought the 120-step rollout to 21.6 / 36.4 /
+42.6, beating the copy-last-frame baseline. See
 [`diffusion/README.md`](diffusion/README.md).
 
 ## Repository layout

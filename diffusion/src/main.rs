@@ -156,6 +156,9 @@ struct Options {
     delta_schedule: String,
     world_noise: f32,
     clean_p: f32,
+    residual: bool,
+    change_threshold: f32,
+    delta_scale: f32,
 }
 
 impl Default for Options {
@@ -197,6 +200,9 @@ impl Default for Options {
             delta_schedule: "constant".to_string(),
             world_noise: 0.1,
             clean_p: 0.5,
+            residual: false,
+            change_threshold: 0.0,
+            delta_scale: 0.5,
         }
     }
 }
@@ -255,6 +261,11 @@ impl Options {
                     options.consistency_delta = value().parse().expect("consistency delta")
                 }
                 "--delta-schedule" => options.delta_schedule = value(),
+                "--residual" => options.residual = true,
+                "--change-threshold" => {
+                    options.change_threshold = value().parse().expect("change threshold")
+                }
+                "--delta-scale" => options.delta_scale = value().parse().expect("delta scale"),
                 "--world-noise" => options.world_noise = value().parse().expect("world noise"),
                 "--clean-p" => options.clean_p = value().parse().expect("clean probability"),
                 "--attention" => {
@@ -711,6 +722,7 @@ fn train_world_model(options: &Options) {
         layers: options.depth.min(4),
         heads: options.heads.min(8),
         context: 4,
+        residual: options.residual,
     };
     let mut model = WorldModel::new(&config, &device);
     let mut optimizer = AdamWConfig::new().init();
@@ -722,7 +734,7 @@ fn train_world_model(options: &Options) {
 
     let started = std::time::Instant::now();
     for step in 1..=options.steps {
-        let (seq, actions, targets) = world_batch(
+        let (seq, actions, targets, copy_source) = world_batch(
             WorldBatchArgs {
                 mask: config.codes as i64,
                 tokens_path: &token_path,
@@ -736,14 +748,49 @@ fn train_world_model(options: &Options) {
             },
             &device,
         );
-        let logits = model.forward_seq(seq, actions);
+        let (logits, change_logits) = model.forward_full(seq, actions);
         let [batch, frames, tokens, codes] = logits.dims();
         let flat = logits.reshape([batch * frames * tokens, codes]);
         let target = targets.reshape([batch * frames * tokens]);
-        let loss = burn::tensor::activation::log_softmax(flat, 1)
+        let ce = burn::tensor::activation::log_softmax(flat, 1)
             .gather(1, target.clone().reshape([-1, 1]))
             .mul_scalar(-1.0)
-            .mean();
+            .reshape([batch * frames * tokens]);
+        let loss = if config.residual {
+            // Cross-entropy only on tokens that really changed, plus a Brier
+            // score on the change flag. The copy source is the clean previous
+            // frame, so "no change" is a real, learnable prediction.
+            let count = batch * frames * tokens;
+            let tgt = target
+                .clone()
+                .into_data()
+                .convert::<i64>()
+                .try_to_vec::<i64>()
+                .unwrap();
+            let cp = copy_source
+                .into_data()
+                .convert::<i64>()
+                .try_to_vec::<i64>()
+                .unwrap();
+            let changed: Vec<f32> = tgt
+                .iter()
+                .zip(cp.iter())
+                .map(|(t, c)| if t == c { 0.0 } else { 1.0 })
+                .collect();
+            let change_target = Tensor::<1>::from_data(TensorData::new(changed, [count]), &device);
+            let change_prob = burn::tensor::activation::sigmoid(change_logits.reshape([count]));
+            let bce = change_prob
+                .sub(change_target.clone())
+                .powf_scalar(2.0)
+                .mean();
+            let ce_changed = ce
+                .mul(change_target.clone())
+                .mean()
+                .div(change_target.mean().clamp_min(1e-6));
+            ce_changed.add(bce.mul_scalar(0.5))
+        } else {
+            ce.mean()
+        };
         let value = loss.clone().into_scalar::<f32>();
         let grads = GradientsParams::from_grads(loss.backward(), &model);
         model = optimizer.step(1e-3, model, grads);
@@ -800,8 +847,11 @@ fn world_ceiling(options: &Options) {
     let mut vq = VqVae::new(&vq_config, &device);
     vq = vq.load_record(ModuleRecord::load(format!("{vq_dir}/model")).expect("load tokenizer"));
     let mut wm = WorldModel::new(&wm_config, &device);
-    wm = wm
-        .load_record(ModuleRecord::load(format!("{checkpoints}/model")).expect("load world model"));
+    wm = wm.load_record(
+        ModuleRecord::load(format!("{checkpoints}/model"))
+            .expect("load world model")
+            .allow_partial(true),
+    );
 
     let recorded = std::fs::read(format!("{prefix}/actions.bin")).expect("read actions");
     let context = wm_config.context;
@@ -843,10 +893,21 @@ fn world_ceiling(options: &Options) {
             &device,
         );
         let acts = Tensor::<2, Int>::from_data(TensorData::new(acts, [1, context]), &device);
-        let predicted = wm.predict(seq, acts).reshape([TOKENS, 1]);
+        let (new_ids, probs) = wm.predict_detail(seq, acts);
         let real = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
         let previous = world_frame_at(&format!("{prefix}/frames.bin"), episode, time - 1, &device);
-        let dream = vq.decode_ids(predicted);
+        let dream = decode_world_prediction(
+            &vq,
+            &wm,
+            ResidualDecode {
+                copy_ids: ids.last().unwrap().clone(),
+                new_ids,
+                probs,
+                anchor: previous.clone(),
+                delta_scale: options.delta_scale,
+                device: &device,
+            },
+        );
         let real_tokens = vq.ids(vq.encode(real.clone())).reshape([TOKENS, 1]);
         let recon = vq.decode_ids(real_tokens);
         let mae = |a: &Tensor<4>, b: &Tensor<4>| {
@@ -864,6 +925,51 @@ fn world_ceiling(options: &Options) {
         errors.2 / n
     );
     leave_after_writing();
+}
+
+/// Decode a prediction as a pixel-space residual: start from the exact last
+/// frame (a copy, which is already a strong baseline here) and add only the
+/// token-space change the model predicts. Going through the tokenizer costs
+/// 5.67 MAE even on a real frame, so decoding from scratch can never beat a
+/// copy; anchoring on the real pixels can.
+struct ResidualDecode<'a> {
+    copy_ids: Tensor<1, Int>,
+    new_ids: Tensor<2, Int>,
+    probs: Tensor<2>,
+    anchor: Tensor<4>,
+    delta_scale: f32,
+    device: &'a Device,
+}
+
+fn decode_world_prediction(vq: &VqVae, wm: &WorldModel, args: ResidualDecode<'_>) -> Tensor<4> {
+    if !wm.config().residual {
+        return vq.decode_ids(args.new_ids.reshape([TOKENS, 1]));
+    }
+    let new_image = vq.decode_ids(args.new_ids.reshape([TOKENS, 1]));
+    let copy_image = vq.decode_ids(args.copy_ids.reshape([TOKENS, 1]));
+    let delta = new_image.sub(copy_image);
+    let values = args
+        .probs
+        .into_data()
+        .convert::<f32>()
+        .try_to_vec::<f32>()
+        .unwrap();
+    let [_, channels, height, width] = args.anchor.dims();
+    let mut weights = Vec::with_capacity(channels * height * width);
+    for _ in 0..channels {
+        for y in 0..height {
+            for x in 0..width {
+                weights.push(values[(y / 4) * 16 + x / 4]);
+            }
+        }
+    }
+    let mask = Tensor::<4>::from_data(
+        TensorData::new(weights, [1, channels, height, width]),
+        args.device,
+    );
+    args.anchor
+        .add(delta.mul(mask).mul_scalar(args.delta_scale))
+        .clamp(-1.0, 1.0)
 }
 
 /// Roll out a dream: warm-start from real frames, then feed the model its own
@@ -897,8 +1003,11 @@ fn dream_rollout(options: &Options) {
     let mut vq = VqVae::new(&vq_config, &device);
     vq = vq.load_record(ModuleRecord::load(format!("{vq_dir}/model")).expect("load tokenizer"));
     let mut wm = WorldModel::new(&wm_config, &device);
-    wm = wm
-        .load_record(ModuleRecord::load(format!("{checkpoints}/model")).expect("load world model"));
+    wm = wm.load_record(
+        ModuleRecord::load(format!("{checkpoints}/model"))
+            .expect("load world model")
+            .allow_partial(true),
+    );
 
     let context = wm_config.context;
     let steps = options.steps.max(1);
@@ -917,6 +1026,7 @@ fn dream_rollout(options: &Options) {
         }
     }
     let mut errors = Vec::new();
+    let mut last_pixels = world_frame_at(&format!("{prefix}/frames.bin"), 0, context - 1, &device);
     for step in 0..steps {
         let action = recorded[context + step - 1] as i64;
         actions.push(action);
@@ -940,8 +1050,20 @@ fn dream_rollout(options: &Options) {
             TensorData::new(actions.clone(), [1, actions.len()]),
             &device,
         );
-        let predicted = wm.predict(seq, acts);
-        let dream = vq.decode_ids(predicted.reshape([TOKENS, 1]));
+        let (new_ids, probs) = wm.predict_detail(seq, acts);
+        let dream = decode_world_prediction(
+            &vq,
+            &wm,
+            ResidualDecode {
+                copy_ids: history.last().unwrap().clone(),
+                new_ids,
+                probs,
+                anchor: last_pixels.clone(),
+                delta_scale: options.delta_scale,
+                device: &device,
+            },
+        );
+        last_pixels = dream.clone();
 
         let real_frame =
             world_frame_at(&format!("{prefix}/frames.bin"), 0, context + step, &device);
@@ -993,7 +1115,12 @@ struct WorldBatchArgs<'a> {
 fn world_batch(
     args: WorldBatchArgs<'_>,
     device: &Device,
-) -> (Tensor<3, Int>, Tensor<2, Int>, Tensor<3, Int>) {
+) -> (
+    Tensor<3, Int>,
+    Tensor<2, Int>,
+    Tensor<3, Int>,
+    Tensor<3, Int>,
+) {
     use std::io::{Read, Seek, SeekFrom};
     let mut tokens_file = std::fs::File::open(args.tokens_path).expect("open tokens");
     let mut actions_file = std::fs::File::open(args.actions_path).expect("open actions");
@@ -1002,8 +1129,10 @@ fn world_batch(
     let mut seq = Vec::with_capacity(args.batch * frames * TOKENS);
     let mut acts = Vec::with_capacity(args.batch * frames);
     let mut targets = Vec::with_capacity(args.batch * frames * TOKENS);
+    let mut copy = Vec::with_capacity(args.batch * frames * TOKENS);
 
     for _ in 0..args.batch {
+        let mut previous: Option<Vec<i64>> = None;
         let episode = rng.below(args.total / 129);
         let time = rng.below(128 - frames) + frames;
         for slot in 0..frames {
@@ -1024,12 +1153,23 @@ fn world_batch(
             // are always the real codes. Context tokens that are not hidden
             // can be replaced with a random code, teaching the model to cope
             // with its own imperfect rollouts.
-            let ratio = if rng.unit() < args.clean_p {
+            // The target frame is fully masked at rollout, so train it that
+            // way too. MaskGIT/corruption applies to the context frames only.
+            // Both branches intentionally return 1.0; the else-if also draws
+            // a random number, which keeps the sampling stream reproducible.
+            #[allow(clippy::if_same_then_else)]
+            let ratio = if slot + 1 == frames {
+                1.0
+            } else if rng.unit() < args.clean_p {
                 1.0
             } else {
                 rng.unit() * 0.7
             };
             let noisy_context = slot + 1 < frames && rng.unit() < args.noise * 10.0;
+            // The clean previous frame is the "copy" the residual head can
+            // fall back to, captured before this frame is masked/corrupted.
+            copy.extend_from_slice(previous.as_deref().unwrap_or(&values));
+            previous = Some(values.clone());
             for value in values {
                 if rng.unit() < ratio {
                     seq.push(args.mask);
@@ -1063,6 +1203,7 @@ fn world_batch(
             TensorData::new(targets, [args.batch, frames, TOKENS]),
             device,
         ),
+        Tensor::<3, Int>::from_data(TensorData::new(copy, [args.batch, frames, TOKENS]), device),
     )
 }
 

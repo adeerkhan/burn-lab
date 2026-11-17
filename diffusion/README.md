@@ -565,7 +565,9 @@ real room -> frames + actions -> VQ-VAE -> 16x16 codes -> dynamics -> next codes
    frame are not in this small port; learned positions are used instead.
 5. **Dream.** `world-dream` warms up from real frames, then feeds the model its
    own predicted tokens and compares the decoded frames with the real room
-   under the same actions. That is where drift shows up.
+   under the same actions. That is where drift shows up. In the residual mode,
+   the decoder starts from the exact previous pixels and adds a gated token
+   delta; see "Residual prediction" below.
 
 ### Commands
 
@@ -582,6 +584,14 @@ cargo run -p diffusion --release -- world-dream --backend wgpu \
     --steps 60 --ckpt /tmp/world/wm --eval-data /tmp/world/vq
 cargo run -p diffusion --release -- world-ceiling --backend wgpu \
     --steps 40 --ckpt /tmp/world/wm --eval-data /tmp/world/vq
+
+# residual variant: train the change head, then roll out from real pixels
+cargo run -p diffusion --release -- world-train --backend wgpu \
+    --steps 2000 --batch 8 --dim 64 --depth 2 --heads 4 --residual \
+    --world-noise 0.1 --clean-p 0.5 --out /tmp/world/wm-residual
+cargo run -p diffusion --release -- world-dream --backend wgpu \
+    --steps 120 --delta-scale 0.5 --ckpt /tmp/world/wm-residual \
+    --eval-data /tmp/world/vq
 ```
 
 ### What actually happened
@@ -592,7 +602,8 @@ cargo run -p diffusion --release -- world-ceiling --backend wgpu \
 | Tokenizer, K=64, 1,500 steps | rec loss ~0.3; dream MAE 31.7 / 36.9 / 40.2 (steps 1-10 / 11-30 / 31+) |
 | Tokenizer, K=256, 8,000 steps | rec loss ~0.15, 73 s, peak 1.6 GB |
 | Dynamics, 2,000 steps | loss 4.29 -> 0.12, 41 s |
-| Dream, K=256 | MAE 36.7 / 45.3 / 44.5 — structured but blurry |
+| Dream, K=256, absolute codes | MAE 36.7 / 45.3 / 44.5 — structured but blurry |
+| Dream, K=256, pixel-anchored residual | MAE 21.6 / 36.4 / 42.6 — beats the copy baseline |
 
 ![Real room and dream side by side](../docs/world-dream.webp)
 
@@ -661,15 +672,63 @@ predictor. That is the real bar to clear, and it is why the next experiments
 should change *what* is predicted (residuals, or latent state), not just make
 the same transformer bigger.
 
+### Residual prediction: the change that worked
+
+The fix is to stop asking the transformer to reconstruct the whole frame. With
+`--residual`, two things change:
+
+1. **Head.** A second head predicts, for each of the 256 tokens, whether it
+   changed relative to the previous frame, with a learned prior biased toward
+   "no change". Cross-entropy is paid only on tokens that really changed.
+2. **Decode.** Instead of decoding predicted codes from scratch, the dream
+   starts from the **exact previous pixels** and adds only the token-space
+   delta, gated by the predicted change probability:
+   `dream = last_pixels + p * (decode(new) - decode(copy))`.
+
+Point 2 matters because decoding *any* real frame through this tokenizer costs
+5.67 MAE, already worse than a plain copy (3.45). A from-scratch decode can
+never beat a copy; anchoring on the real pixels can. The target frame is also
+always fully masked during training now, matching what the model sees at
+rollout (previously it was only fully masked half the time).
+
+One-step, measured from real context:
+
+| Predictor | MAE |
+| --- | ---: |
+| Copy the last real frame | 3.45 |
+| Pixel-anchored residual, 2000 steps (`--delta-scale 0.5`) | **3.73** |
+| Same model with `--delta-scale 1` | 4.07 |
+| Absolute-code model, target always masked | 9.11 |
+| Absolute-code model, target half-masked | 9.07 |
+
+The residual model is close to the copy baseline at one step but does not beat
+it: a wrong code still adds a noisy delta. Longer training (6,000 steps) made
+this worse, and scaling the delta past 0.5 hurt — the token-level signal is the
+limit. Over a **120-step rollout**, however, anchoring on real pixels stops the
+tokenizer's reconstruction error from compounding, and the model wins:
+
+| 120-step rollout | Steps 1-10 | 11-30 | 31+ |
+| --- | ---: | ---: | ---: |
+| Copy the last real frame | 22.22 | 36.76 | 46.89 |
+| Absolute-code dream | 25.07 | 35.14 | 46.15 |
+| Pixel-anchored residual (`--delta-scale 0.5`) | **21.61** | **36.42** | **42.56** |
+
+That is the first result here that beats a trivial predictor on a fair,
+same-action, 120-step comparison — about 9% better than copy-last at the end of
+the rollout. A 81%-no-change token rate (49 of 256 tokens change per frame) is
+what makes a residual target trainable at all. The remaining lever is to train
+the residual head directly against pixel differences instead of a binary
+code-change flag.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer
 training run and ~10x the parameters.
 
 This is a working miniature of the whole idea, not a playable dream. To get
-there: change the prediction target to residuals or latent state, train the
-tokenizer for much longer, add 3D RoPE and the anchor frame, and feed back the
-model's own predictions over a longer schedule.
+there: train the residual head against pixel differences, train the tokenizer
+for much longer, add 3D RoPE and the anchor frame, and build an interactive
+player.
 
 ## Verification
 

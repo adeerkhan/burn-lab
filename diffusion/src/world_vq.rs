@@ -151,7 +151,7 @@ impl VqVae {
         self.encoder_out.forward(h)
     }
 
-    fn decode(&self, z: Tensor<4>) -> Tensor<4> {
+    pub fn decode(&self, z: Tensor<4>) -> Tensor<4> {
         let mut h = self.decoder_in.forward(z);
         h = self.decoder_res[0].forward(h);
         h = self.decoder_up1.forward(h);

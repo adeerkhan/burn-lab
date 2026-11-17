@@ -29,6 +29,10 @@ pub struct WorldConfig {
     pub layers: usize,
     pub heads: usize,
     pub context: usize,
+    /// Predict a change flag plus a new code, falling back to copying the
+    /// previous frame's code. Much stronger on a slowly changing room.
+    #[serde(default)]
+    pub residual: bool,
 }
 
 impl Default for WorldConfig {
@@ -39,6 +43,7 @@ impl Default for WorldConfig {
             layers: 2,
             heads: 4,
             context: 4,
+            residual: false,
         }
     }
 }
@@ -131,6 +136,8 @@ pub struct WorldModel {
     blocks: Vec<(Block, Block)>,
     norm: LayerNorm,
     head: Linear,
+    change_head: Linear,
+    change_prior: Param<Tensor<1>>,
     #[module(skip)]
     config: WorldConfig,
 }
@@ -163,6 +170,11 @@ impl WorldModel {
             blocks,
             norm: LayerNormConfig::new(dim).init(device),
             head: LinearConfig::new(dim, codes).init(device),
+            // Bias toward "no change": at init the model copies the last frame
+            // unless it learns evidence to the contrary. This makes the copy
+            // baseline the starting point rather than something to discover.
+            change_head: LinearConfig::new(dim, 1).init(device),
+            change_prior: Param::from_tensor(Tensor::<1>::full([1], -2.0, device)),
             config: config.clone(),
         }
     }
@@ -171,8 +183,13 @@ impl WorldModel {
         &self.config
     }
 
-    /// Logits for every token of every frame: `[B, frames, 256, CODES]`.
-    pub fn forward_seq(&self, seq: Tensor<3, Int>, actions: Tensor<2, Int>) -> Tensor<4> {
+    /// Code logits `[B, frames, 256, codes]` and change logits
+    /// `[B, frames, 256, 1]` for every token of every frame.
+    pub fn forward_full(
+        &self,
+        seq: Tensor<3, Int>,
+        actions: Tensor<2, Int>,
+    ) -> (Tensor<4>, Tensor<4>) {
         let [batch, frames, tokens] = seq.dims();
         assert_eq!(tokens, TOKENS);
         let code_emb = self.code.forward(seq.reshape([batch * frames, tokens]));
@@ -228,21 +245,39 @@ impl WorldModel {
                 .reshape([batch, tokens, frames, self.config.dim])
                 .swap_dims(1, 2);
         }
-        self.head
-            .forward(
-                self.norm
-                    .forward(x.reshape([batch * frames, tokens, self.config.dim])),
-            )
-            .reshape([batch, frames, tokens, self.config.codes])
+        let h = self
+            .norm
+            .forward(x.reshape([batch * frames, tokens, self.config.dim]));
+        let logits =
+            self.head
+                .forward(h.clone())
+                .reshape([batch, frames, tokens, self.config.codes]);
+        let change = self
+            .change_head
+            .forward(h)
+            .add(self.change_prior.val().reshape([1, 1, 1]))
+            .reshape([batch, frames, tokens, 1]);
+        (logits, change)
     }
 
-    /// Predict one frame from a clean context, in a single pass (MaskGIT 1 pass).
-    pub fn predict(&self, seq: Tensor<3, Int>, actions: Tensor<2, Int>) -> Tensor<2, Int> {
+    /// Absolute-code logits only, for the non-residual path and the shape test.
+    pub fn forward_seq(&self, seq: Tensor<3, Int>, actions: Tensor<2, Int>) -> Tensor<4> {
+        self.forward_full(seq, actions).0
+    }
+
+    /// Predict the next frame's codes and a per-token probability that each
+    /// token changed relative to the last context frame. The probability lets
+    /// callers blend the copy and new codes in latent space instead of making
+    /// a hard switch, which is much more forgiving of a wrong new code.
+    pub fn predict_detail(
+        &self,
+        seq: Tensor<3, Int>,
+        actions: Tensor<2, Int>,
+    ) -> (Tensor<2, Int>, Tensor<2>) {
+        let device = seq.device();
         let [batch, frames, _] = seq.dims();
         let codes = self.config.codes;
         let mask = codes as i64;
-        // Copy the context into the window: Burn has no index-assign, so rebuild
-        // with gather-free concatenation on the host for this tiny case.
         let context_values = seq
             .clone()
             .into_data()
@@ -259,7 +294,7 @@ impl WorldModel {
         }
         let full = Tensor::<3, Int>::from_data(
             TensorData::new(values, [batch, frames + 1, TOKENS]),
-            &seq.device(),
+            &device,
         );
         let mut acts = actions
             .into_data()
@@ -268,13 +303,79 @@ impl WorldModel {
             .unwrap();
         acts.extend(vec![NO_ACTION; batch]);
         let actions_full =
-            Tensor::<2, Int>::from_data(TensorData::new(acts, [batch, frames + 1]), &full.device());
-        let logits = self.forward_seq(full, actions_full);
-        logits
+            Tensor::<2, Int>::from_data(TensorData::new(acts, [batch, frames + 1]), &device);
+        let (logits, change_logits) = self.forward_full(full, actions_full);
+        let new_codes = logits
             .narrow(1, frames, 1)
             .reshape([batch * TOKENS, codes])
             .argmax(1)
             .reshape([batch, TOKENS])
+            .into_data()
+            .convert::<i64>()
+            .try_to_vec::<i64>()
+            .unwrap();
+        let change = change_logits
+            .narrow(1, frames, 1)
+            .reshape([batch * TOKENS])
+            .into_data()
+            .convert::<f32>()
+            .try_to_vec::<f32>()
+            .unwrap();
+        let probs: Vec<f32> = change.iter().map(|x| 1.0 / (1.0 + (-x).exp())).collect();
+        (
+            Tensor::<2, Int>::from_data(TensorData::new(new_codes, [batch, TOKENS]), &device),
+            Tensor::<2>::from_data(TensorData::new(probs, [batch, TOKENS]), &device),
+        )
+    }
+
+    /// Hard switch: use the new code where the change probability crosses the
+    /// threshold, otherwise copy the last context frame's code.
+    pub fn predict_with_threshold(
+        &self,
+        seq: Tensor<3, Int>,
+        actions: Tensor<2, Int>,
+        threshold: f32,
+    ) -> Tensor<2, Int> {
+        let device = seq.device();
+        let [batch, frames, _] = seq.dims();
+        let context_values = seq
+            .clone()
+            .into_data()
+            .convert::<i64>()
+            .try_to_vec::<i64>()
+            .unwrap();
+        let (codes, probs) = self.predict_detail(seq, actions);
+        if !self.config.residual {
+            return codes;
+        }
+        let codes = codes
+            .into_data()
+            .convert::<i64>()
+            .try_to_vec::<i64>()
+            .unwrap();
+        let probs = probs
+            .into_data()
+            .convert::<f32>()
+            .try_to_vec::<f32>()
+            .unwrap();
+        let mut predicted = Vec::with_capacity(batch * TOKENS);
+        for item in 0..batch {
+            let start = (item * frames + frames - 1) * TOKENS;
+            let copy = &context_values[start..start + TOKENS];
+            for (token, copy_code) in copy.iter().enumerate() {
+                let flat = item * TOKENS + token;
+                predicted.push(if probs[flat] > threshold {
+                    codes[flat]
+                } else {
+                    *copy_code
+                });
+            }
+        }
+        Tensor::<2, Int>::from_data(TensorData::new(predicted, [batch, TOKENS]), &device)
+    }
+
+    pub fn predict(&self, seq: Tensor<3, Int>, actions: Tensor<2, Int>) -> Tensor<2, Int> {
+        self.predict_with_threshold(seq, actions, 0.0)
     }
 }
 
@@ -291,13 +392,24 @@ mod tests {
             layers: 1,
             heads: 4,
             context: 3,
+            residual: false,
         };
         let model = WorldModel::new(&config, &device);
         let seq = Tensor::<3, Int>::zeros([2, 3, TOKENS], &device);
         let actions = Tensor::<2, Int>::zeros([2, 3], &device);
         let logits = model.forward_seq(seq.clone(), actions.clone());
         assert_eq!(logits.dims(), [2, 3, TOKENS, 16]);
-        let predicted = model.predict(seq, actions);
+        let predicted = model.predict(seq.clone(), actions.clone());
         assert_eq!(predicted.dims(), [2, TOKENS]);
+
+        let residual = WorldConfig {
+            residual: true,
+            ..config
+        };
+        let model = WorldModel::new(&residual, &device);
+        let (logits, change) = model.forward_full(seq.clone(), actions.clone());
+        assert_eq!(logits.dims(), [2, 3, TOKENS, 16]);
+        assert_eq!(change.dims(), [2, 3, TOKENS, 1]);
+        assert_eq!(model.predict(seq, actions).dims(), [2, TOKENS]);
     }
 }
