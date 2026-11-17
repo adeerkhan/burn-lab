@@ -3,7 +3,9 @@
 
 use burn::prelude::*;
 use burn::tensor::Distribution;
-use diffusion::flow::{FlowConfig, FlowLoss, FlowSolver, NoiseSchedule, Predict, RectifiedFlow};
+use diffusion::flow::{
+    DeltaSchedule, FlowConfig, FlowLoss, FlowSolver, NoiseSchedule, Predict, RectifiedFlow,
+};
 use diffusion::unet::{Unet, UnetConfig};
 
 fn network(device: &Device) -> Unet {
@@ -126,5 +128,27 @@ fn every_solver_returns_a_finite_image() {
             .try_to_vec::<f32>()
             .unwrap();
         assert!(data.iter().all(|value| value.is_finite()), "{solver:?}");
+    }
+}
+
+#[test]
+fn consistency_delta_schedules_stay_finite() {
+    let device = Device::flex();
+    let shadow = network(&device);
+    for schedule in [
+        DeltaSchedule::Constant,
+        DeltaSchedule::Linear,
+        DeltaSchedule::Cosine,
+    ] {
+        let flow = RectifiedFlow::new(network(&device), 16).with_config(FlowConfig {
+            consistency: true,
+            delta_schedule: schedule,
+            ..FlowConfig::default()
+        });
+        let (data, noise) = tensors(&device);
+        let value = flow
+            .p_losses(data, &[0.1, 0.9], noise, &device, Some(&shadow))
+            .into_scalar::<f32>();
+        assert!(value.is_finite() && value >= 0.0, "{schedule:?}: {value}");
     }
 }

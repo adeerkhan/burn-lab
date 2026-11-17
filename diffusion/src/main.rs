@@ -6,11 +6,15 @@ use burn::optim::{AdamWConfig, GradientsParams};
 use burn::prelude::*;
 use burn::store::ModuleRecord;
 
+use diffusion::classify_data::LabeledImages;
 use diffusion::diffusion::{BetaSchedule, GaussianDiffusion, Objective};
 use diffusion::ema::Ema;
-use diffusion::flow::{FlowConfig, FlowLoss, FlowSolver, NoiseSchedule, Predict, RectifiedFlow};
+use diffusion::flow::{
+    DeltaSchedule, FlowConfig, FlowLoss, FlowSolver, NoiseSchedule, Predict, RectifiedFlow,
+};
 use diffusion::unet::{Unet, UnetConfig};
 use diffusion::vit::{AttentionKind, Vit, VitConfig};
+use diffusion::vit_classifier::{ClassifierConfig, VitClassifier};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct CheckpointConfig {
@@ -48,6 +52,17 @@ struct CheckpointConfig {
     immiscible: bool,
     #[serde(default)]
     consistency: bool,
+    #[serde(default = "default_delta")]
+    consistency_delta: f32,
+    #[serde(default = "default_delta_schedule")]
+    delta_schedule: String,
+}
+
+fn default_delta() -> f32 {
+    1e-3
+}
+fn default_delta_schedule() -> String {
+    "constant".to_string()
 }
 
 fn default_predict() -> String {
@@ -78,6 +93,12 @@ fn flow_config(config: &CheckpointConfig) -> FlowConfig {
         },
         immiscible: config.immiscible,
         consistency: config.consistency,
+        consistency_delta_time: config.consistency_delta,
+        delta_schedule: match config.delta_schedule.as_str() {
+            "linear" => DeltaSchedule::Linear,
+            "cosine" => DeltaSchedule::Cosine,
+            _ => DeltaSchedule::Constant,
+        },
         ..FlowConfig::default()
     }
 }
@@ -129,6 +150,8 @@ struct Options {
     pairs: String,
     count: usize,
     solver: String,
+    consistency_delta: f32,
+    delta_schedule: String,
 }
 
 impl Default for Options {
@@ -166,6 +189,8 @@ impl Default for Options {
             pairs: String::new(),
             count: 2048,
             solver: "midpoint".to_string(),
+            consistency_delta: 1e-3,
+            delta_schedule: "constant".to_string(),
         }
     }
 }
@@ -220,6 +245,10 @@ impl Options {
                 "--pairs" => options.pairs = value(),
                 "--count" => options.count = value().parse().expect("count"),
                 "--solver" => options.solver = value(),
+                "--consistency-delta" => {
+                    options.consistency_delta = value().parse().expect("consistency delta")
+                }
+                "--delta-schedule" => options.delta_schedule = value(),
                 "--attention" => {
                     options.attention = value()
                         .split(',')
@@ -266,6 +295,8 @@ fn checkpoint_config(options: &Options) -> CheckpointConfig {
         schedule: options.schedule.clone(),
         immiscible: options.immiscible,
         consistency: options.consistency,
+        consistency_delta: options.consistency_delta,
+        delta_schedule: options.delta_schedule.clone(),
     }
 }
 
@@ -335,6 +366,7 @@ fn main() {
         "search-attention" => search_attention(&options),
         "reflow" => train_reflow(&options),
         "migrate" => migrate_record(&options),
+        "classify" => classify(&options),
         "make-pairs" => make_pairs(&options),
         other => panic!("unknown command `{other}`, expected train, sample or smoke"),
     }
@@ -371,6 +403,134 @@ fn build_model(config: &CheckpointConfig, device: &Device) -> Unet {
     } else {
         Unet::new(&unet_config(config), device)
     }
+}
+
+/// Train a small ViT classifier on a streaming u8 dataset, then report held-out
+/// accuracy. No full dataset is ever held in RAM.
+fn classify(options: &Options) {
+    let device = options.device().autodiff();
+    let options = &options;
+    let prefix = if options.data.is_empty() {
+        "/home/adeerkhan/tmp/flowers/cls".to_string()
+    } else {
+        options.data.clone()
+    };
+    let held_prefix = if options.eval_data.is_empty() {
+        format!("{prefix}-held")
+    } else {
+        options.eval_data.clone()
+    };
+    let train_prefix = if prefix.ends_with("-train") {
+        prefix.clone()
+    } else {
+        format!("{prefix}-train")
+    };
+    let classes = std::fs::read_to_string(format!("{prefix}-classes.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value["classes"].as_array().map(|a| a.len()))
+        .unwrap_or(5);
+    let config = ClassifierConfig {
+        image_size: options.image_size,
+        classes,
+        dim: options.dim.min(128),
+        depth: options.depth.min(6),
+        heads: options.heads.min(8),
+        ..ClassifierConfig::default()
+    };
+
+    let mut train = LabeledImages::load(
+        &format!("{train_prefix}-images.bin"),
+        &format!("{train_prefix}-labels.bin"),
+        config.image_size,
+    );
+    let mut held = LabeledImages::load(
+        &format!("{held_prefix}-images.bin"),
+        &format!("{held_prefix}-labels.bin"),
+        config.image_size,
+    );
+    println!(
+        "classifier dim={} depth={} heads={} classes={} train={} held={}",
+        config.dim,
+        config.depth,
+        config.heads,
+        classes,
+        train.len(),
+        held.len()
+    );
+
+    let mut model = VitClassifier::new(&config, &device);
+    let mut optimizer = AdamWConfig::new().init();
+    let started = std::time::Instant::now();
+    let steps = options.steps.max(1);
+
+    for step in 1..=steps {
+        let seed = options.seed ^ (step as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let (images, labels) = train.batch(options.batch, seed, &device);
+        let logits = model.forward(images);
+        let loss = cross_entropy(logits, &labels, &device);
+        let value = loss.clone().into_scalar::<f32>();
+        let grads = GradientsParams::from_grads(loss.backward(), &model);
+        // Warm up then cosine decay; a constant 1e-3 oscillates around this loss.
+        let progress = step as f64 / steps as f64;
+        let lr = 1e-3 * (0.1 + 0.9 * 0.5 * (1.0 + (std::f64::consts::PI * progress).cos()));
+        model = optimizer.step(lr, model, grads);
+
+        if step == 1 || step % 100 == 0 {
+            println!("step {step:>5} loss {value:.4}");
+        }
+    }
+
+    // Held-out accuracy in batches, never materialising all images at once.
+    let total = held.len();
+    let mut correct = 0usize;
+    let mut done = 0usize;
+    let mut seed = options.seed + 777;
+    while done < total {
+        let count = options.batch.min(total - done);
+        // The loader samples randomly; a fixed-size pass over held data is
+        // approximate but unbiased enough for a progress report.
+        let (images, labels) = held.batch(count, seed, &device);
+        seed = seed.wrapping_add(1);
+        let predicted = model.forward(images).argmax(1).reshape([count, 1]);
+        let actual = labels.reshape([count, 1]);
+        let hits = predicted
+            .equal(actual)
+            .to_data()
+            .convert::<bool>()
+            .try_to_vec::<bool>()
+            .unwrap();
+        correct += hits.iter().filter(|hit| **hit).count();
+        done += count;
+    }
+    let accuracy = correct as f32 / total as f32;
+    println!(
+        "held-out accuracy {:.3} ({} / {}), trained in {:.1}s",
+        accuracy,
+        correct,
+        total,
+        started.elapsed().as_secs_f64()
+    );
+
+    std::fs::create_dir_all(&options.out).ok();
+    model
+        .clone()
+        .valid()
+        .into_record()
+        .save(format!("{}/model", options.out))
+        .expect("save the classifier");
+    std::fs::write(
+        format!("{}/config.json", options.out),
+        serde_json::to_string_pretty(&config).expect("serialise"),
+    )
+    .expect("write config");
+    leave_after_writing();
+}
+
+fn cross_entropy(logits: Tensor<2>, labels: &Tensor<2, Int>, _device: &Device) -> Tensor<1> {
+    // log-softmax then gather the log-probability of the correct class.
+    let log_probs = burn::tensor::activation::log_softmax(logits, 1);
+    log_probs.gather(1, labels.clone()).mul_scalar(-1.0).mean()
 }
 
 /// One-off: rewrite a record saved by the enum wrapper into the inner

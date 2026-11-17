@@ -77,3 +77,25 @@ fn the_vit_trains_under_a_flow_loss() {
     let value = loss.into_scalar::<f32>();
     assert!(value.is_finite() && value >= 0.0, "loss was {value}");
 }
+
+#[test]
+fn classification_head_preserves_shape() {
+    let device = Device::flex();
+    let config = diffusion::vit_classifier::ClassifierConfig {
+        image_size: 32,
+        patch_size: 8,
+        classes: 5,
+        dim: 32,
+        depth: 2,
+        heads: 4,
+        ..Default::default()
+    };
+    let model = diffusion::vit_classifier::VitClassifier::new(&config, &device);
+    let x = Tensor::<4>::random(
+        [2, 3, 32, 32],
+        burn::tensor::Distribution::Normal(0.0, 1.0),
+        &device,
+    );
+    let logits = model.forward(x);
+    assert_eq!(logits.dims(), [2, 5]);
+}

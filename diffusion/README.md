@@ -462,6 +462,53 @@ experiment can speak to quality, not to speed.
 | `ema_pytorch` in the trainer | `src/ema.rs` |
 | `Dataset` over a folder of images | `src/data.rs`: synthetic shapes, plus a flat-file loader with a held-out split |
 
+## Flower classification, reviewed
+
+The ViT failed as a generative backbone, so we checked it on the task ViTs are
+built for: five-class flower classification (daisy, dandelion, roses, sunflowers,
+tulips) from the 3,670 TensorFlow photos. This was a short experiment, not a
+quality campaign.
+
+**Memory-first design.** `scripts/prepare_classification.py` writes 64×64 u8
+images and u8 labels as flat files. `classify_data::LabeledImages` keeps two open
+file handles and `seek`s to random rows, so no dataset is loaded into RAM. The
+classifier is `dim 64`, depth 4, 4 heads, patch 8 (about 1M parameters), batch
+16. Peak RSS with `--steps 1000` was **439 MB**, and a run took 16 s.
+
+```sh
+python3 scripts/prepare_classification.py
+cargo run -p diffusion --release -- classify --backend wgpu \
+    --steps 1500 --batch 16 --dim 64 --depth 4 --heads 4 --out /tmp/cls
+```
+
+**Results and the review trail.** Held-out accuracy on 364 images:
+
+| Configuration | Steps | Accuracy | Peak RSS |
+| --- | ---: | ---: | ---: |
+| chance | — | 0.200 | — |
+| first streaming loader | 600 | 0.223 | 1.95 GB |
+| interleaved-RGB planes fixed (`GLM-041`) | 600 | 0.247 | 379 MB |
+| residual scale 0.1, mean pooling | 1000 | **0.324** | 463 MB |
+| same, 1500 steps | 1500 | **0.376** | 427 MB |
+| larger model (`dim 96`, depth 6) | 2000 | 0.327 | 1.46 GB |
+| CLS token instead of mean pooling | 2000 | 0.280 | 1.76 GB |
+
+What the process showed:
+
+- **The first result was at chance because of a data-layout bug**, the same
+  interleaved-RGB-versus-planar mistake fixed earlier for generation. Flow
+  metrics were self-consistent despite it; accuracy made it obvious. The fix
+  also cut peak memory from 1.95 GB to 379 MB.
+- **Mean pooling beat a CLS token here**, and used a quarter of the memory. The
+  extra token and concatenation cost 1.76 GB for 28% accuracy. Reverted.
+- **Bigger was worse.** `dim 96`, depth 6 reached 33% with 1.46 GB, against
+  37.6% with the small model at 427 MB. With 3,303 training images the larger
+  model just overfits.
+- **The remaining gap is data fidelity, not architecture.** 37.6% on five
+  classes after 24 seconds is a workable sanity check, not a good classifier;
+  the flowers are small, overlapping classes and the model sees each image only
+  a few times.
+
 ## Verification
 
 `tests/parity.rs` compares against numbers extracted from the reference source

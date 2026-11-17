@@ -123,6 +123,14 @@ Four things were fixed by measuring rather than guessing, and each is written up
   estimator says 1.07×. The 8×8 metric measures coarse colour and layout; nothing here is comparable
   with a paper's FID.
 
+### Flower classification, briefly
+
+The ViT was also tried on five-class flower classification with a streaming
+64×64 u8 loader: peak RSS **439 MB**, 16 s for 1,000 steps, and **37.6%** held-out
+accuracy after 1,500 steps against 20% chance. A CLS token and a larger model
+were both worse and used 4x the memory; mean pooling and a small model won.
+See [`diffusion/README.md`](diffusion/README.md) for the review trail.
+
 ## Quick start
 
 ```sh

@@ -78,6 +78,16 @@ pub enum NoiseSchedule {
     Cosmap,
 }
 
+/// How the consistency time shift varies along the path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeltaSchedule {
+    Constant,
+    /// Larger shift near the noise end, vanishing at the data end.
+    Linear,
+    /// Cosine ramp, zero at the data end.
+    Cosine,
+}
+
 #[derive(Clone, Debug)]
 pub struct FlowConfig {
     pub predict: Predict,
@@ -90,6 +100,7 @@ pub struct FlowConfig {
     pub consistency_weight: f32,
     pub consistency_velocity_alpha: f32,
     pub consistency_delta_time: f32,
+    pub delta_schedule: DeltaSchedule,
 }
 
 impl Default for FlowConfig {
@@ -103,6 +114,7 @@ impl Default for FlowConfig {
             consistency_weight: 1.0,
             consistency_velocity_alpha: 1e-5,
             consistency_delta_time: 1e-3,
+            delta_schedule: DeltaSchedule::Constant,
         }
     }
 }
@@ -289,7 +301,16 @@ impl RectifiedFlow {
         let delta = self.config.consistency_delta_time;
         let shifted: Vec<f32> = scheduled
             .iter()
-            .map(|time| (time + delta).min(1.0 - delta))
+            .map(|time| {
+                let shift = match self.config.delta_schedule {
+                    DeltaSchedule::Constant => delta,
+                    DeltaSchedule::Linear => delta * (1.0 - time),
+                    DeltaSchedule::Cosine => {
+                        delta * 0.5 * (1.0 + (std::f32::consts::PI * time).cos())
+                    }
+                };
+                (time + shift).min(1.0 - 1e-3)
+            })
             .collect();
         let shifted_t = Tensor::<1>::from_data(TensorData::new(shifted.clone(), [batch]), device)
             .reshape([batch, 1, 1, 1]);
