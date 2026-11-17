@@ -223,7 +223,7 @@ Reflowed model, same architecture, 6k reflow steps:
 | 2 | 4.49 | **4.46** | 4.73 |
 | 4 | 4.50 | **4.35** | 4.41 |
 | 8 | 3.90 | **3.80** | 4.41 |
-| 16 | 4.04 | 4.31 | — |
+| 16 | 4.04 | 4.31 | 4.10 |
 
 Three things to take away:
 
