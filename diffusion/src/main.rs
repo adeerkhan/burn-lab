@@ -8,7 +8,7 @@ use burn::store::ModuleRecord;
 
 use diffusion::diffusion::{BetaSchedule, GaussianDiffusion, Objective};
 use diffusion::ema::Ema;
-use diffusion::flow::{FlowConfig, FlowLoss, NoiseSchedule, Predict, RectifiedFlow};
+use diffusion::flow::{FlowConfig, FlowLoss, FlowSolver, NoiseSchedule, Predict, RectifiedFlow};
 use diffusion::unet::{Unet, UnetConfig};
 use diffusion::vit::{AttentionKind, Vit, VitConfig};
 
@@ -128,6 +128,7 @@ struct Options {
     consistency: bool,
     pairs: String,
     count: usize,
+    solver: String,
 }
 
 impl Default for Options {
@@ -164,6 +165,7 @@ impl Default for Options {
             consistency: false,
             pairs: String::new(),
             count: 2048,
+            solver: "midpoint".to_string(),
         }
     }
 }
@@ -217,6 +219,7 @@ impl Options {
                 "--consistency" => options.consistency = true,
                 "--pairs" => options.pairs = value(),
                 "--count" => options.count = value().parse().expect("count"),
+                "--solver" => options.solver = value(),
                 "--attention" => {
                     options.attention = value()
                         .split(',')
@@ -436,7 +439,7 @@ fn make_pairs(options: &Options) {
             burn::tensor::Distribution::Normal(0.0, 1.0),
             &device,
         );
-        let pair = flow.sample_from(noise.clone(), steps, &device);
+        let pair = flow.sample_from(noise.clone(), steps, FlowSolver::Midpoint, &device);
         noises.extend(
             noise
                 .into_data()
@@ -591,6 +594,7 @@ fn train_reflow(options: &Options) {
                 .sample_from(
                     noise.clone().to_device(&base_device),
                     options.sampling_timesteps,
+                    FlowSolver::Midpoint,
                     &base_device,
                 )
                 .to_device(&device);
@@ -1135,7 +1139,15 @@ fn sample(options: &Options) {
     };
 
     let started = std::time::Instant::now();
-    let images = trainer.sample(options.samples, sampling, &device);
+    let solver = match options.solver.as_str() {
+        "euler" => FlowSolver::Euler,
+        "heun" => FlowSolver::Heun,
+        _ => FlowSolver::Midpoint,
+    };
+    let images = match &trainer {
+        Trainer::Flow(flow) => flow.sample_with_solver(options.samples, sampling, solver, &device),
+        _ => trainer.sample(options.samples, sampling, &device),
+    };
     // A published checkpoint records the training file it was fitted on, which
     // will not exist on another machine. Sampling must still work; only the
     // nearest-training distance needs the data.

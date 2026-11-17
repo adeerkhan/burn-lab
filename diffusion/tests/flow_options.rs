@@ -3,7 +3,7 @@
 
 use burn::prelude::*;
 use burn::tensor::Distribution;
-use diffusion::flow::{FlowConfig, FlowLoss, NoiseSchedule, Predict, RectifiedFlow};
+use diffusion::flow::{FlowConfig, FlowLoss, FlowSolver, NoiseSchedule, Predict, RectifiedFlow};
 use diffusion::unet::{Unet, UnetConfig};
 
 fn network(device: &Device) -> Unet {
@@ -93,9 +93,9 @@ fn a_single_step_reflow_sample_returns_an_image() {
     let flow = RectifiedFlow::new(network(&device), 16);
     let noise = Tensor::<4>::random([2, 3, 16, 16], Distribution::Normal(0.0, 1.0), &device);
     device.seed(11);
-    let once = flow.sample_from(noise.clone(), 1, &device);
+    let once = flow.sample_from(noise.clone(), 1, FlowSolver::Midpoint, &device);
     device.seed(11);
-    let twice = flow.sample_from(noise, 1, &device);
+    let twice = flow.sample_from(noise, 1, FlowSolver::Midpoint, &device);
     assert_eq!(once.dims(), [2, 3, 16, 16]);
     let a = once
         .into_data()
@@ -109,4 +109,22 @@ fn a_single_step_reflow_sample_returns_an_image() {
         .unwrap();
     assert_eq!(a, b);
     assert!(a.iter().all(|value| value.is_finite()));
+}
+
+#[test]
+fn every_solver_returns_a_finite_image() {
+    let device = Device::flex();
+    let flow = RectifiedFlow::new(network(&device), 16);
+    let noise = Tensor::<4>::random([2, 3, 16, 16], Distribution::Normal(0.0, 1.0), &device);
+    for solver in [FlowSolver::Euler, FlowSolver::Midpoint, FlowSolver::Heun] {
+        device.seed(11);
+        let out = flow.sample_from(noise.clone(), 3, solver, &device);
+        assert_eq!(out.dims(), [2, 3, 16, 16], "{solver:?}");
+        let data = out
+            .into_data()
+            .convert::<f32>()
+            .try_to_vec::<f32>()
+            .unwrap();
+        assert!(data.iter().all(|value| value.is_finite()), "{solver:?}");
+    }
 }

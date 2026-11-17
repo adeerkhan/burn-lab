@@ -39,6 +39,18 @@ use burn::tensor::Distribution;
 
 use crate::unet::Unet;
 
+/// The ODE integrator used at sampling time. All three reuse the same weights;
+/// only the trajectory differs. Costs are counted in network evaluations (NFE).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlowSolver {
+    /// One evaluation per step: `x += h v(x, t)`.
+    Euler,
+    /// Two evaluations per step: midpoint of the interval. The default here.
+    Midpoint,
+    /// Two evaluations per step: trapezoid (Heun), explicit and second order.
+    Heun,
+}
+
 /// What the network's output is interpreted as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Predict {
@@ -306,8 +318,20 @@ impl RectifiedFlow {
         )
     }
 
-    /// Integrate from noise at `t = 0` to data at `t = 1` with the midpoint rule.
+    /// Integrate from noise at `t = 0` to data at `t = 1` with the default
+    /// (midpoint) solver.
     pub fn sample(&self, batch: usize, steps: usize, device: &Device) -> Tensor<4> {
+        self.sample_with_solver(batch, steps, FlowSolver::Midpoint, device)
+    }
+
+    /// Sample with an explicit choice of integrator.
+    pub fn sample_with_solver(
+        &self,
+        batch: usize,
+        steps: usize,
+        solver: FlowSolver,
+        device: &Device,
+    ) -> Tensor<4> {
         self.sample_from(
             Tensor::<4>::random(
                 [batch, 3, self.image_size, self.image_size],
@@ -315,13 +339,20 @@ impl RectifiedFlow {
                 device,
             ),
             steps,
+            solver,
             device,
         )
     }
 
     /// The ODE from an explicit starting noise, which reflow needs to keep the
     /// coupling it trains on.
-    pub fn sample_from(&self, noise: Tensor<4>, steps: usize, _device: &Device) -> Tensor<4> {
+    pub fn sample_from(
+        &self,
+        noise: Tensor<4>,
+        steps: usize,
+        solver: FlowSolver,
+        _device: &Device,
+    ) -> Tensor<4> {
         let steps = steps.max(1);
         let batch = noise.dims()[0];
         let mut x = noise;
@@ -329,16 +360,24 @@ impl RectifiedFlow {
 
         for index in 0..steps {
             let time = index as f32 * step;
-            let first = self.velocity(x.clone(), time, batch);
-            if steps == 1 {
-                // A single Euler step from the noise; the midpoint would need a
-                // second evaluation the caller did not ask for.
-                x = x.add(first.mul_scalar(step));
-                break;
+            match solver {
+                FlowSolver::Euler => {
+                    let first = self.velocity(x.clone(), time, batch);
+                    x = x.add(first.mul_scalar(step));
+                }
+                FlowSolver::Midpoint => {
+                    let first = self.velocity(x.clone(), time, batch);
+                    let midpoint = x.clone().add(first.mul_scalar(step * 0.5));
+                    let second = self.velocity(midpoint, time + step * 0.5, batch);
+                    x = x.add(second.mul_scalar(step));
+                }
+                FlowSolver::Heun => {
+                    let first = self.velocity(x.clone(), time, batch);
+                    let endpoint = x.clone().add(first.clone().mul_scalar(step));
+                    let second = self.velocity(endpoint, (time + step).min(1.0), batch);
+                    x = x.add(first.add(second).mul_scalar(step * 0.5));
+                }
             }
-            let midpoint = x.clone().add(first.mul_scalar(step * 0.5));
-            let second = self.velocity(midpoint, time + step * 0.5, batch);
-            x = x.add(second.mul_scalar(step));
         }
         x
     }

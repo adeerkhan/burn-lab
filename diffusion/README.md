@@ -201,6 +201,43 @@ other way at both points. The 22,000-step checkpoint is saved as
 The remaining half of step 2 is a clean continuation to 48k steps with an
 optimizer-state-aware resume; the user stopped the first attempt.
 
+### ODE solvers at matched compute
+
+No training here: one checkpoint, 512 samples per setting, three explicit
+integrators, with **network evaluations (NFE) held equal** so the comparison is
+about compute, not step labels. `--solver euler|midpoint|heun`.
+
+Base flow model, `dim 24`, 13k steps:
+
+| NFE | Euler | Midpoint | Heun |
+| ---: | ---: | ---: | ---: |
+| 2 | 22.93 | **18.99** | 22.44 |
+| 4 | 16.98 | **12.09** | 17.90 |
+| 8 | 10.42 | **6.40** | 11.39 |
+| 16 | 6.19 | **3.87** | 5.64 |
+
+Reflowed model, same architecture, 6k reflow steps:
+
+| NFE | Euler | Midpoint | Heun |
+| ---: | ---: | ---: | ---: |
+| 2 | 4.49 | **4.46** | 4.73 |
+| 4 | 4.50 | **4.35** | 4.41 |
+| 8 | 3.90 | **3.80** | 4.41 |
+| 16 | 4.04 | 4.31 | — |
+
+Three things to take away:
+
+- **Midpoint wins every budget on the un-rectified model**, often by 3-4 FID.
+  Midpoint at 8 NFE (6.40) roughly matches Euler at 16 NFE (6.19): the extra
+  half-step evaluation buys a factor of two.
+- **Higher order is not higher quality here.** Heun's trapezoid update is worse
+  than plain Euler at 2, 4 and 8 NFE. On this velocity field the midpoint's
+  half-step is better damped than a full-step trapezoid.
+- **Reflow is what makes cheap solvers usable.** At 2 NFE Euler scores 4.49 on
+  the rectified model against 22.93 on the original: a 5x difference from the
+  same integrator. Straightening the path matters more than the integrator
+  once it is done; before it, the integrator dominates.
+
 ### What the numbers say, and the order to fix them in
 
 Two measurements point at the same problem:

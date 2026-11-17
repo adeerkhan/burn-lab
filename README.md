@@ -58,6 +58,7 @@ Three points carry the study:
 - **Steps are not monotone.** 7k → 24k improves by 0.59; 24k → 48k *harms* by 1.38 while the training
   loss keeps falling.
 - **The data lever works in the metric that sees detail.** Ten times the photographs (TensorFlow flowers + Oxford 102, with random-resized-crop augmentation) took Inception-256 FID from 151.0 to **106.5** against a floor of 17.8, while 8×8 pixel-FID moved the other way, 3.40 to 5.96. The two metrics measure different things; the coarse one cannot see what the extra data bought.
+- **The solver matters most before reflow.** At 2 network evaluations midpoint scores 18.99 and Euler 22.93 on the flow model, but Euler scores 4.49 on the reflowed model. Heun, a higher-order method, is worse than Euler: on this velocity field the midpoint's half-step is better damped than a trapezoid.
 - **Reflow buys the cheap end.** One Euler step goes from 24.967 to **4.079**, a 6.1× improvement, at
   a cost of 0.7 at twenty steps.
 - **Resolution costs compute, and the metric cannot see it.** The same 112k-image budget at 128×128
