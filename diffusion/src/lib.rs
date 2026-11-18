@@ -3,6 +3,7 @@
 
 pub mod classify_data;
 pub mod data;
+pub mod detail;
 pub mod diffusion;
 pub mod ema;
 pub mod flow;

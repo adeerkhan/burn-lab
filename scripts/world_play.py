@@ -59,6 +59,17 @@ class DreamClient:
             raise RuntimeError("short frame from world-play")
         return np.frombuffer(raw, dtype=np.uint8).reshape(64, 64, 3)
 
+    def preview(self, action: int) -> np.ndarray:
+        """Predict without committing, for planning."""
+        self.process.stdin.write(f"p {int(action)}\n".encode())
+        self.process.stdin.flush()
+        header = self.process.stdout.readline().decode().strip()
+        if not header.startswith("F "):
+            raise RuntimeError(f"unexpected reply: {header!r}")
+        size = int(header.split()[1])
+        raw = self.process.stdout.read(size)
+        return np.frombuffer(raw, dtype=np.uint8).reshape(64, 64, 3)
+
     def sync(self, frames: list[tuple[int, np.ndarray]]) -> None:
         """Re-sync from (action, frame) records, oldest first."""
         self.process.stdin.write(f"s {len(frames)}\n".encode())
@@ -110,9 +121,13 @@ def headless(args, client: DreamClient) -> None:
         actions.append(action)
         real_frames.pop(0)
         actions.pop(0)
-        if (step + 1) % 20 == 0:
+        if args.resync_every and (step + 1) % args.resync_every == 0:
+            client.sync([(0, real_frames[0])] + [(actions[i - 1], real_frames[i]) for i in range(1, len(real_frames))])
+        if (step + 1) % 50 == 0:
             print(f"step {step + 1}/{min(len(script), args.steps)}", flush=True)
     print(f"wrote {len(list(args.frames.glob('step-*.png')))} frames to {args.frames}")
+    if hasattr(env, "collected"):
+        print(f"collected {env.collected} diamonds, caught {env.caught} times")
 
 
 def interactive(args, client: DreamClient) -> None:
@@ -191,6 +206,7 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--context", type=int, default=4)
     ap.add_argument("--steps", type=int, default=120)
+    ap.add_argument("--resync-every", type=int, default=0)
     ap.add_argument("--script", type=Path, default=None)
     ap.add_argument("--frames", type=Path, default=None)
     args = ap.parse_args()

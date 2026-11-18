@@ -37,6 +37,8 @@ def main() -> None:
     ap.add_argument("--scale", type=int, default=6)
     ap.add_argument("--fps", type=int, default=12)
     ap.add_argument("--context", type=int, default=4)
+    ap.add_argument("--filter", choices=["nearest", "bicubic", "lanczos"], default="nearest")
+    ap.add_argument("--sharpen", type=float, default=0.0)
     a = ap.parse_args()
 
     frames = sorted(a.frames.glob("step-*.png"))
@@ -51,8 +53,9 @@ def main() -> None:
     work = a.out.parent / "world-video-frames"
     work.mkdir(parents=True, exist_ok=True)
     for index, path in enumerate(frames):
+        resample = {"nearest": Image.NEAREST, "bicubic": Image.BICUBIC, "lanczos": Image.LANCZOS}[a.filter]
         strip = Image.open(path).convert("RGB").resize(
-            (out_w, panel_h * a.scale), Image.NEAREST
+            (out_w, panel_h * a.scale), resample
         )
         frame = Image.new("RGB", (out_w, out_h), (12, 13, 17))
         frame.paste(strip, (0, 0))
@@ -80,7 +83,8 @@ def main() -> None:
             "ffmpeg", "-y", "-loglevel", "error",
             "-framerate", str(a.fps),
             "-i", str(work / "f%04d.png"),
-            "-vf", "format=yuv420p", "-c:v", "libx264", "-crf", "22",
+            "-vf", ("unsharp=5:5:" + str(a.sharpen) + ",format=yuv420p") if a.sharpen > 0 else "format=yuv420p",
+            "-c:v", "libx264", "-crf", "20",
             "-movflags", "+faststart", str(a.out),
         ],
         check=True,

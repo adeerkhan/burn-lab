@@ -2,17 +2,16 @@
 
     python3 scripts/dungeon_env.py --episodes 300 --steps 128
 
-Generates a cave with the classic 4-5 rule cellular automaton, then drives a
-player toward a goal cell. Frames are 64x64 RGB u8, actions are the same five
-ids as the FireflyRoom (stay / up / down / left / right), and the output files
-have exactly the layout the Rust world model already reads:
+A 64x64 cave carved by the classic 4-5 rule, rendered one pixel per cell so the
+map is four times larger than the earlier 32x32 version at the same 64x64
+output. The player carries a warm torch, collects cyan diamonds, avoids red
+enemies that chase when close, and can head for a green exit. Actions are the
+same five ids as the FireflyRoom, and the output files keep the layout the Rust
+world model already reads:
 
     frames.bin   uint8, episode*(steps+1) + time, 3*64*64 interleaved bytes
     actions.bin  uint8, episode*steps + time
     meta.json    episode count, step count, action names
-
-The player carries a torch: only nearby cells are bright, so navigating is a
-real task rather than reading a fully visible map.
 """
 
 import argparse
@@ -24,14 +23,16 @@ import numpy as np
 
 DIR_NAMES = ["stay", "up", "down", "left", "right"]
 DELTA = [(0, 0), (0, -1), (0, 1), (-1, 0), (1, 0)]
-GRID = 32
-SCALE = 2
-CELLS = GRID * GRID
+GRID = 64
+SCALE = 1
+FLOOR = np.array([40, 46, 62], dtype=np.float32)
+WALL = np.array([158, 144, 124], dtype=np.float32)
+WARM = np.array([1.0, 0.72, 0.38], dtype=np.float32)
 
 
 def generate(grid_rng: np.random.Generator) -> np.ndarray:
-    """Classic cave CA: random fill then 4 iterations of the 4-5 rule."""
-    grid = (grid_rng.random((GRID, GRID)) < 0.45).astype(np.uint8)
+    """Classic cave CA: random fill then four iterations of the 4-5 rule."""
+    grid = (grid_rng.random((GRID, GRID)) < 0.46).astype(np.uint8)
     for _ in range(4):
         padded = np.pad(grid, 1, mode="constant", constant_values=1)
         neighbours = sum(
@@ -74,12 +75,12 @@ def bfs_step(grid: np.ndarray, start, goal) -> int:
 
 
 class Dungeon:
-    def __init__(self, seed: int, n_enemies: int = 2):
+    def __init__(self, seed: int, n_enemies: int = 3, n_diamonds: int = 5):
         rng = np.random.default_rng(seed)
         self.rng = rng
         self.grid = generate(rng)
         floor = [(x, y) for y in range(GRID) for x in range(GRID) if self.grid[y, x] == 0]
-        if len(floor) < 40:
+        if len(floor) < 120:
             raise RuntimeError("degenerate dungeon")
         start = floor[int(rng.integers(len(floor)))]
         self.start = start
@@ -87,13 +88,17 @@ class Dungeon:
         candidates = [c for c in reachable if abs(c[0] - start[0]) + abs(c[1] - start[1]) > GRID // 2]
         self.goal = candidates[int(rng.integers(len(candidates)))] if candidates else start
         self.player = start
-        far = [c for c in reachable if abs(c[0] - start[0]) + abs(c[1] - start[1]) > 9]
-        self.enemies = [far[int(rng.integers(len(far)))] for _ in range(min(n_enemies, len(far)))] if far else []
+        far = [c for c in reachable if abs(c[0] - start[0]) + abs(c[1] - start[1]) > 10]
+        far = far or list(reachable)
+        rng.shuffle(far)
+        self.enemies = far[: min(n_enemies, len(far))]
+        self.diamonds = far[len(self.enemies): len(self.enemies) + n_diamonds]
         self.hits = 0
         self.caught = 0
-        yy, xx = np.mgrid[0:64, 0:64]
-        self.xs = xx / SCALE
-        self.ys = yy / SCALE
+        self.collected = 0
+        yy, xx = np.mgrid[0:GRID, 0:GRID]
+        self.xs = xx.astype(np.float32)
+        self.ys = yy.astype(np.float32)
 
     def _free(self, cell) -> bool:
         x, y = cell
@@ -102,27 +107,29 @@ class Dungeon:
     def step(self, action: int) -> np.ndarray:
         action = int(action)
         dx, dy = DELTA[action]
-        nx, ny = self.player[0] + dx, self.player[1] + dy
-        if self._free((nx, ny)):
-            self.player = (nx, ny)
+        nxt = (self.player[0] + dx, self.player[1] + dy)
+        if self._free(nxt):
+            self.player = nxt
         else:
             self.hits += 1
+        if self.player in self.diamonds:
+            self.diamonds.remove(self.player)
+            self.collected += 1
         if self.player == self.goal:
             options = [c for c in component(self.grid, self.player)
                        if abs(c[0] - self.player[0]) + abs(c[1] - self.player[1]) > GRID // 2]
             self.goal = options[int(self.rng.integers(len(options)))] if options else self.player
 
-        # Enemies chase when the player is close, otherwise wander slowly.
         for index, enemy in enumerate(self.enemies):
             distance = abs(enemy[0] - self.player[0]) + abs(enemy[1] - self.player[1])
-            if distance <= 9:
-                dx = np.sign(self.player[0] - enemy[0])
-                dy = np.sign(self.player[1] - enemy[1])
-                choices = [(enemy[0] + int(dx), enemy[1]), (enemy[0], enemy[1] + int(dy))]
+            if distance <= 10 and self.rng.random() < 0.72:
+                dx = int(np.sign(self.player[0] - enemy[0]))
+                dy = int(np.sign(self.player[1] - enemy[1]))
+                choices = [(enemy[0] + dx, enemy[1]), (enemy[0], enemy[1] + dy)]
                 choices = [c for c in choices if self._free(c)]
                 if choices:
                     enemy = choices[int(self.rng.integers(len(choices)))]
-            elif self.rng.random() < 0.6:
+            elif self.rng.random() < 0.55:
                 moves = [(enemy[0] + ddx, enemy[1] + ddy) for ddx, ddy in DELTA[1:]]
                 moves = [c for c in moves if self._free(c)]
                 if moves:
@@ -133,50 +140,63 @@ class Dungeon:
                 self.caught += 1
         return self.render()
 
+    def _blit(self, image: np.ndarray, cell, colour, core=None) -> None:
+        x, y = cell
+        x0, x1 = max(0, x - 1), min(GRID, x + 2)
+        y0, y1 = max(0, y - 1), min(GRID, y + 2)
+        image[y0:y1, x0:x1] = colour
+        if core is not None and 0 <= x < GRID and 0 <= y < GRID:
+            image[y, x] = core
+
     def render(self) -> np.ndarray:
-        cells = self.grid[np.minimum(self.ys.astype(int), GRID - 1),
-                          np.minimum(self.xs.astype(int), GRID - 1)]
-        floor_colour = np.array([42, 46, 56], dtype=np.float32)
-        wall_colour = np.array([150, 156, 168], dtype=np.float32)
-        image = np.where(cells[..., None] == 0, floor_colour, wall_colour)
+        cells = self.grid
+        variation = (((self.xs * 7 + self.ys * 13).astype(np.int32)) % 9 - 4)[..., None] * 1.6
+        image = np.where(cells[..., None] == 0, FLOOR + variation, WALL).astype(np.float32)
 
-        px = self.player[0] * SCALE + SCALE / 2 - 0.5
-        py = self.player[1] * SCALE + SCALE / 2 - 0.5
-        distance = np.hypot(self.xs * SCALE - px, self.ys * SCALE - py)
-        torch = 0.18 + 0.82 * np.exp(-np.square(distance / 11.0))
-        image *= torch[..., None]
+        px, py = self.player
+        distance = np.hypot(self.xs - px, self.ys - py)
+        torch = 0.24 + 0.76 * np.exp(-np.square(distance / 22.0))
+        image = image * torch[..., None] + (WARM * 54.0) * (torch * torch)[..., None]
 
-        goal_mask = (np.abs(self.xs - self.goal[0]) < 1.0) & (np.abs(self.ys - self.goal[1]) < 1.0)
-        image[goal_mask] = np.array([70, 255, 130], dtype=np.float32) * (0.4 + 0.6 * torch[goal_mask, None])
+        for diamond in self.diamonds:
+            glow = np.exp(-np.square(np.hypot(self.xs - diamond[0], self.ys - diamond[1]) / 2.6))
+            image += glow[..., None] * np.array([40, 150, 190], dtype=np.float32) * 0.5
+            self._blit(image, diamond, np.array([70, 220, 255], dtype=np.float32),
+                       np.array([235, 255, 255], dtype=np.float32))
         for enemy in self.enemies:
-            enemy_mask = (np.abs(self.xs - enemy[0]) < 1.0) & (np.abs(self.ys - enemy[1]) < 1.0)
-            brightness = 0.55 + 0.45 * torch[enemy_mask].mean() if enemy_mask.any() else 0.4
-            image[enemy_mask] = np.array([255, 82, 82], dtype=np.float32) * brightness
-        player_mask = (np.abs(self.xs - self.player[0]) < 1.0) & (np.abs(self.ys - self.player[1]) < 1.0)
-        image[player_mask] = np.array([255, 214, 92], dtype=np.float32)
+            glow = np.exp(-np.square(np.hypot(self.xs - enemy[0], self.ys - enemy[1]) / 2.4))
+            image += glow[..., None] * np.array([190, 30, 40], dtype=np.float32) * 0.45
+            self._blit(image, enemy, np.array([250, 70, 82], dtype=np.float32),
+                       np.array([120, 12, 20], dtype=np.float32))
+        self._blit(image, self.goal, np.array([60, 250, 140], dtype=np.float32),
+                   np.array([225, 255, 230], dtype=np.float32))
+        self._blit(image, self.player, np.array([255, 214, 92], dtype=np.float32),
+                   np.array([255, 250, 220], dtype=np.float32))
         return np.clip(image, 0, 255).astype(np.uint8)
 
 
 def navigate(dungeon: Dungeon, rng: np.random.Generator):
-    """Follow the goal, but dodge enemies that get close."""
+    """Collect diamonds, dodge enemies, then head for the exit."""
     while True:
         if dungeon.enemies:
             nearest = min(dungeon.enemies,
                           key=lambda e: abs(e[0] - dungeon.player[0]) + abs(e[1] - dungeon.player[1]))
             gap = abs(nearest[0] - dungeon.player[0]) + abs(nearest[1] - dungeon.player[1])
-            if gap <= 4 and rng.random() < 0.75:
-                dx = np.sign(dungeon.player[0] - nearest[0])
-                dy = np.sign(dungeon.player[1] - nearest[1])
+            if gap <= 6 and rng.random() < 0.78:
+                dx = int(np.sign(dungeon.player[0] - nearest[0]))
+                dy = int(np.sign(dungeon.player[1] - nearest[1]))
                 for action, (ddx, ddy) in enumerate(DELTA[1:], start=1):
-                    if (ddx, ddy) == (int(dx), int(dy)) or (ddx, ddy) == (0, int(dy)):
+                    if (ddx, ddy) in ((dx, 0), (0, dy)):
                         if dungeon._free((dungeon.player[0] + ddx, dungeon.player[1] + ddy)):
                             yield action
                             break
                 else:
                     yield int(rng.integers(5))
                 continue
-        if rng.random() < 0.82:
-            yield bfs_step(dungeon.grid, dungeon.player, dungeon.goal)
+        targets = dungeon.diamonds or [dungeon.goal]
+        target = min(targets, key=lambda c: abs(c[0] - dungeon.player[0]) + abs(c[1] - dungeon.player[1]))
+        if rng.random() < 0.85:
+            yield bfs_step(dungeon.grid, dungeon.player, target)
         else:
             yield int(rng.integers(5))
 
@@ -187,15 +207,16 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=128)
     ap.add_argument("--out", type=Path, default=Path("/home/adeerkhan/tmp/dungeon/data"))
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--enemies", type=int, default=2)
+    ap.add_argument("--enemies", type=int, default=3)
+    ap.add_argument("--diamonds", type=int, default=5)
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
-    frames = np.empty((args.episodes, args.steps + 1, 64, 64, 3), dtype=np.uint8)
+    frames = np.empty((args.episodes, args.steps + 1, GRID, GRID, 3), dtype=np.uint8)
     actions = np.empty((args.episodes, args.steps), dtype=np.uint8)
     for episode in range(args.episodes):
         seed = args.seed * 100003 + episode
-        dungeon = Dungeon(seed, args.enemies)
+        dungeon = Dungeon(seed, args.enemies, args.diamonds)
         policy = navigate(dungeon, np.random.default_rng(seed + 1))
         frames[episode, 0] = dungeon.render()
         for t in range(args.steps):
@@ -209,7 +230,7 @@ def main() -> None:
     (args.out / "frames.bin").write_bytes(flat.tobytes())
     (args.out / "actions.bin").write_bytes(np.ascontiguousarray(actions).tobytes())
     (args.out / "meta.json").write_text(json.dumps({
-        "episodes": args.episodes, "steps": args.steps, "size": 64, "actions": DIR_NAMES,
+        "episodes": args.episodes, "steps": args.steps, "size": GRID, "actions": DIR_NAMES,
     }))
     print(f"wrote {args.out}: frames {frames.shape}, {flat.size / 1e6:.1f} MB")
 

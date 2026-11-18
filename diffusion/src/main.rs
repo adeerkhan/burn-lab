@@ -7,6 +7,7 @@ use burn::prelude::*;
 use burn::store::ModuleRecord;
 
 use diffusion::classify_data::LabeledImages;
+use diffusion::detail::{DetailNet, detail_loss};
 use diffusion::diffusion::{BetaSchedule, GaussianDiffusion, Objective};
 use diffusion::ema::Ema;
 use diffusion::flow::{
@@ -161,6 +162,7 @@ struct Options {
     delta_scale: f32,
     passes: usize,
     token_feedback: bool,
+    detail: String,
 }
 
 impl Default for Options {
@@ -207,6 +209,7 @@ impl Default for Options {
             delta_scale: 0.5,
             passes: 4,
             token_feedback: false,
+            detail: String::new(),
         }
     }
 }
@@ -272,6 +275,7 @@ impl Options {
                 "--delta-scale" => options.delta_scale = value().parse().expect("delta scale"),
                 "--passes" => options.passes = value().parse().expect("pass count"),
                 "--token-feedback" => options.token_feedback = true,
+                "--detail" => options.detail = value(),
                 "--world-noise" => options.world_noise = value().parse().expect("world noise"),
                 "--clean-p" => options.clean_p = value().parse().expect("clean probability"),
                 "--attention" => {
@@ -398,6 +402,7 @@ fn main() {
         "world-dream" => dream_rollout(&options),
         "world-ceiling" => world_ceiling(&options),
         "world-play" => world_play(&options),
+        "world-detail" => train_detail(&options),
         "make-pairs" => make_pairs(&options),
         other => panic!("unknown command `{other}`; see README for the command list"),
     }
@@ -1024,6 +1029,7 @@ fn dream_rollout(options: &Options) {
             .expect("load world model")
             .allow_partial(true),
     );
+    let detail = load_detail(&options.detail, &device);
 
     let context = wm_config.context;
     let steps = options.steps.max(1);
@@ -1079,11 +1085,19 @@ fn dream_rollout(options: &Options) {
                 device: &device,
             },
         );
+        // Sharpen only what is displayed: feeding the sharpened frame back
+        // into the anchor amplifies the residual net's high frequencies and
+        // diverges within a few dozen steps.
+        let display = if let Some(net) = &detail {
+            net.forward(dream.clone())
+        } else {
+            dream.clone()
+        };
         last_pixels = dream.clone();
 
         let real_frame =
             world_frame_at(&format!("{prefix}/frames.bin"), 0, context + step, &device);
-        let error = dream
+        let error = display
             .clone()
             .sub(real_frame.clone())
             .abs()
@@ -1094,7 +1108,7 @@ fn dream_rollout(options: &Options) {
         // [real | dream] strip, one frame per `checkpoint_every` steps.
         let stride = options.checkpoint_every.max(1);
         if step % stride == 0 {
-            let strip = Tensor::cat(vec![real_frame, dream.clone()], 3);
+            let strip = Tensor::cat(vec![real_frame, display.clone()], 3);
             save_samples(strip, &format!("{}/step-{step:04}.png", options.out));
         }
         // Feeding the model's own token ids back avoids a lossy decode ->
@@ -1118,6 +1132,67 @@ fn dream_rollout(options: &Options) {
     };
     let (early, mid, late) = (mean(0..10), mean(10..30), mean(30..errors.len()));
     println!("dream MAE (0-255): steps 1-10 {early:.2}, 11-30 {mid:.2}, 31+ {late:.2}");
+    leave_after_writing();
+}
+
+/// Load the optional detail decoder used to sharpen played-back frames.
+fn load_detail(path: &str, device: &Device) -> Option<DetailNet> {
+    if path.is_empty() {
+        return None;
+    }
+    let mut net = DetailNet::new(32, device);
+    net = net.load_record(ModuleRecord::load(format!("{path}/detail")).expect("load detail net"));
+    Some(net)
+}
+
+/// Train the residual detail decoder on (VQ reconstruction, real frame) pairs.
+fn train_detail(options: &Options) {
+    let device = options.device().autodiff();
+    let prefix = if options.data.is_empty() {
+        "/home/adeerkhan/tmp/world/data".to_string()
+    } else {
+        options.data.clone()
+    };
+    let vq_dir = if options.checkpoint.is_empty() {
+        "/home/adeerkhan/tmp/world/vq".to_string()
+    } else {
+        options.checkpoint.clone()
+    };
+    let vq_config: VqConfig = serde_json::from_str(
+        &std::fs::read_to_string(format!("{vq_dir}/config.json")).expect("read vq config"),
+    )
+    .expect("parse vq config");
+    let mut vq = VqVae::new(&vq_config, &device);
+    vq = vq.load_record(ModuleRecord::load(format!("{vq_dir}/model")).expect("load tokenizer"));
+    let steps_per_episode = 129usize;
+    let episodes = (std::fs::metadata(format!("{prefix}/frames.bin"))
+        .expect("frame file")
+        .len() as usize
+        / (3 * 64 * 64 * steps_per_episode))
+        .max(1);
+    let mut model = DetailNet::new(32, &device);
+    let mut optimizer = AdamWConfig::new().init();
+    println!("detail net channels=32 episodes={episodes}");
+    let started = std::time::Instant::now();
+    for step in 1..=options.steps {
+        let mut rng = diffusion::data::Rng::new(options.seed + step as u64);
+        let episode = rng.below(episodes.saturating_sub(10).max(1));
+        let time = rng.below(steps_per_episode - 1);
+        let real = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
+        let ids = vq.ids(vq.encode(real.clone()));
+        let recon = vq.decode_ids(ids);
+        let out = model.forward(recon);
+        let loss = detail_loss(&out, &real);
+        let value = loss.clone().into_scalar::<f32>();
+        let grads = GradientsParams::from_grads(loss.backward(), &model);
+        model = optimizer.step(3e-4, model, grads);
+        if step == 1 || step % 200 == 0 {
+            println!("step {step:>5} loss {value:.4}");
+        }
+    }
+    println!("trained in {:.1}s", started.elapsed().as_secs_f64());
+    std::fs::create_dir_all(&options.out).ok();
+    diffusion::detail::save_detail(model, &options.out);
     leave_after_writing();
 }
 
@@ -1154,6 +1229,64 @@ fn rgb_u8_to_frame(bytes: &[u8], device: &Device) -> Tensor<4> {
         }
     }
     Tensor::<4>::from_data(TensorData::new(values, [1, 3, 64, 64]), device)
+}
+
+struct PlayPredict<'a> {
+    vq: &'a VqVae,
+    wm: &'a WorldModel,
+    history: &'a [Tensor<1, Int>],
+    actions: &'a [i64],
+    anchor: &'a Tensor<4>,
+    options: &'a Options,
+    device: &'a Device,
+    context: usize,
+}
+
+/// Predict the next dream frame for a candidate action without touching the
+/// caller's state. Used by both `a` (commit) and `p` (preview for planning).
+fn play_predict(args: PlayPredict<'_>, action: i64) -> Tensor<4> {
+    let mut actions = args.actions.to_vec();
+    actions.push(action);
+    let seq = Tensor::<3, Int>::from_data(
+        TensorData::new(
+            args.history
+                .iter()
+                .flat_map(|ids| {
+                    ids.clone()
+                        .into_data()
+                        .convert::<i64>()
+                        .try_to_vec::<i64>()
+                        .unwrap()
+                })
+                .collect::<Vec<_>>(),
+            [1, args.context, TOKENS],
+        ),
+        args.device,
+    );
+    let acts = Tensor::<2, Int>::from_data(
+        TensorData::new(actions.clone(), [1, actions.len()]),
+        args.device,
+    );
+    let (new_ids, probs) = args.wm.predict_multipass(seq, acts, args.options.passes);
+    decode_world_prediction(
+        args.vq,
+        args.wm,
+        ResidualDecode {
+            copy_ids: args.history.last().unwrap().clone(),
+            new_ids,
+            probs,
+            anchor: args.anchor.clone(),
+            delta_scale: args.options.delta_scale,
+            device: args.device,
+        },
+    )
+}
+
+fn play_display(detail: Option<&DetailNet>, dream: Tensor<4>) -> Tensor<4> {
+    match detail {
+        Some(net) => net.forward(dream),
+        None => dream,
+    }
 }
 
 /// Stream dream frames for the interactive player.
@@ -1197,6 +1330,7 @@ fn world_play(options: &Options) {
             .expect("load world model")
             .allow_partial(true),
     );
+    let detail = load_detail(&options.detail, &device);
     let context = wm_config.context;
     let recorded = std::fs::read(format!("{prefix}/actions.bin")).expect("read actions");
     let mut history: Vec<Tensor<1, Int>> = Vec::new();
@@ -1239,47 +1373,30 @@ fn world_play(options: &Options) {
                     }
                 }
             }
-            Some("a") => {
+            Some(command @ ("a" | "p")) => {
                 let action: i64 = parts.get(1).unwrap_or(&"0").parse().unwrap_or(0);
-                actions.push(action);
-                let seq = Tensor::<3, Int>::from_data(
-                    TensorData::new(
-                        history
-                            .iter()
-                            .flat_map(|ids| {
-                                ids.clone()
-                                    .into_data()
-                                    .convert::<i64>()
-                                    .try_to_vec::<i64>()
-                                    .unwrap()
-                            })
-                            .collect::<Vec<_>>(),
-                        [1, context, TOKENS],
-                    ),
-                    &device,
-                );
-                let acts = Tensor::<2, Int>::from_data(
-                    TensorData::new(actions.clone(), [1, actions.len()]),
-                    &device,
-                );
-                let (new_ids, probs) = wm.predict_multipass(seq, acts, options.passes);
-                let dream = decode_world_prediction(
-                    &vq,
-                    &wm,
-                    ResidualDecode {
-                        copy_ids: history.last().unwrap().clone(),
-                        new_ids: new_ids.clone(),
-                        probs,
-                        anchor: anchor.clone(),
-                        delta_scale: options.delta_scale,
+                let dream = play_predict(
+                    PlayPredict {
+                        vq: &vq,
+                        wm: &wm,
+                        history: &history,
+                        actions: &actions,
+                        anchor: &anchor,
+                        options,
                         device: &device,
+                        context,
                     },
+                    action,
                 );
-                anchor = dream.clone();
-                history.push(vq.ids(vq.encode(dream.clone())).reshape([TOKENS]));
-                history.remove(0);
-                actions.remove(0);
-                let bytes = frame_to_rgb_u8(dream);
+                let display = play_display(detail.as_ref(), dream.clone());
+                if command == "a" {
+                    anchor = dream.clone();
+                    history.push(vq.ids(vq.encode(dream.clone())).reshape([TOKENS]));
+                    history.remove(0);
+                    actions.remove(0);
+                    actions.push(action);
+                }
+                let bytes = frame_to_rgb_u8(display);
                 writeln!(stdout, "F {}", bytes.len()).expect("write header");
                 stdout.write_all(&bytes).expect("write frame");
                 stdout.flush().expect("flush frame");

@@ -820,75 +820,69 @@ within 0.3-3.8 MAE out of 255, so the player is not a separate, untested path.
 
 A second world, generated rather than hand-built, using the **same pixel
 format and the same model**. `scripts/dungeon_env.py` runs the classic cave
-cellular automaton (32x32 cells, random 45% fill, four iterations of the 4-5
-rule), then drops a torch-lit player into the largest open region with a green
-goal cell. A scripted navigator follows a BFS path 82% of the time and explores
-randomly otherwise. 300 episodes x 129 frames were recorded as flat u8/i64
-files under `/home/adeerkhan/tmp/dungeon/data` — no new Rust code was needed;
-the trainers now derive the episode count from the file size instead of
-assuming 400.
+cellular automaton (64x64 cells, random 46% fill, four iterations of the 4-5
+rule) and renders one pixel per cell, so the map is four times larger than the
+earlier 32x32 version at the same 64x64 output. A warm torch follows the
+player, **cyan diamonds** are collectible, **red enemies** wander and chase
+when close, and a **green exit** relocates when reached. The navigator collects
+the nearest diamond, dodges enemies and then heads for the exit. 300 episodes
+x 129 frames were recorded as flat u8/i64 files — no new Rust code was needed;
+the trainers derive the episode count from the file size.
 
-![Dungeon real room and dream](../docs/dungeon-dream.gif)
+![Dungeon with diamonds and enemies](../docs/dungeon-diamonds-long.gif)
 
 ```sh
-python3 scripts/dungeon_env.py --episodes 300 --steps 128
-cargo run -p diffusion --release -- world-vq --backend wgpu \
-    --data /tmp/dungeon/data --steps 8000 --dim 48 --timesteps 256 \
-    --out /tmp/dungeon/vq
-cargo run -p diffusion --release -- world-encode --backend wgpu \
-    --data /tmp/dungeon/data --ckpt /tmp/dungeon/vq
-cargo run -p diffusion --release -- world-train --backend wgpu \
-    --data /tmp/dungeon/data --steps 2000 --residual --out /tmp/dungeon/wm
-cargo run -p diffusion --release -- world-dream --backend wgpu \
-    --data /tmp/dungeon/data --delta-scale 0.1 \
-    --ckpt /tmp/dungeon/wm --eval-data /tmp/dungeon/vq
+python3 scripts/dungeon_env.py --episodes 300 --steps 128     --enemies 2 --diamonds 5
+cargo run -p diffusion --release -- world-vq --backend wgpu     --data /tmp/dungeon/data --steps 8000 --dim 48 --timesteps 256     --out /tmp/dungeon/vq
+cargo run -p diffusion --release -- world-encode --backend wgpu     --data /tmp/dungeon/data --ckpt /tmp/dungeon/vq
+cargo run -p diffusion --release -- world-train --backend wgpu     --data /tmp/dungeon/data --steps 2000 --residual --out /tmp/dungeon/wm
 ```
 
-| Dungeon metric | Value |
+| 64x64 dungeon metric | Value |
 | --- | ---: |
-| One-step: copy / VQ-VAE ceiling / world model | 1.03 / 1.36 / 1.15 (`--delta-scale 0.1`) |
-| 120-step copy-last baseline | 5.49 / 10.74 / 11.16 |
-| 120-step dream (`--delta-scale 0.1`) | **5.77 / 10.53 / 12.14** |
-| Tokenizer reconstruction loss, 8k steps | ~0.04 |
+| One-step: copy / VQ-VAE ceiling / world model | 1.52 / 5.41 / 1.54 (`--delta-scale 0.1`) |
+| 120-step copy baseline | 7.76 / 3.30 / 13.36 |
+| 120-step dream | 7.80 / 3.75 / 13.85 |
 
-The dungeon is much easier than the FireflyRoom in MAE terms because most of
-the frame is dark, but it exposes a different failure: at the default
-`--delta-scale 0.5` the dream becomes speckled, because wrong codes in the dark
-areas cost almost no pixel error, so the model is free to drift into noise.
-Lowering the delta scale to 0.1 anchors it to the previous frame and restores
-clean walls, torch and goal. This is a useful reminder that MAE alone does not
-measure structural correctness.
+The brighter, more detailed cave is harder to tokenize (ceiling 5.41 against
+1.36 in the dark 32x32 version) and the copy baseline is very strong. The dream
+keeps the cave, torch, diamonds, enemies and exit visually coherent but does
+not beat copying on pixel error.
 
-Navigation is interactive too: `scripts/world_play.py --env dungeon --data
-/tmp/dungeon/data --ckpt /tmp/dungeon/wm --eval-data /tmp/dungeon/vq` drives the
-real dungeon and the dream with the same arrow keys, with space to re-sync.
+[`docs/dungeon-diamonds-long.mp4`](../docs/dungeon-diamonds-long.mp4) is a
+**60-second, 720-step** rollout at 12 fps, re-synced from the real room every
+60 steps. It goes through the interactive player rather than `world-dream`
+because the offline loader assumes 129-step episodes; the player only needs
+real frames at a sync, so rollout length is limited by the environment, not the
+dataset. Re-sync is what keeps a dream coherent for a minute.
 
-### Enemies and a 30-second rollout
+#### The important negative result: action fidelity
 
-The dungeon now has **enemies**: 1-3 red creatures per cave that wander when
-the player is far and chase by a greedy step when it is within nine cells.
-Touching one sends the player back to the start. The recorded navigator dodges
-them when they get within four cells, so the actions carry real avoidance
-behaviour for the model to learn. Everything else — 64x64 RGB, five actions,
-flat files, the same tokenizer and dynamics model — is unchanged.
+A simulator is only useful if the action changes the future. It barely does
+here. Previewing or committing actions 1-4 from the same state produces
+trajectories that are almost identical: the yellow player marker moves by a
+fraction of a pixel in the same direction for every action. The model has
+learned the *statistics* of motion, not the *effect* of the action.
 
-| Enemy dungeon metric | Value |
-| --- | ---: |
-| One-step: copy / VQ-VAE ceiling / model | 1.74 / 1.89 / 1.75 |
-| 120-step dream (`--delta-scale 0.1`) | 6.31 / 4.06 / 5.45 |
+That is expected given the data: the scripted navigator's action is almost
+determined by its position and the BFS path, so the model can predict the next
+frame from context alone and ignore the action embedding. The no-change prior
+and the residual target make that even easier. For a world model to rival
+reinforcement learning it has to pass this test first — an action must be the
+only explanation for the next frame. The fixes are concrete: record
+**counterfactual** branches (the same state with all five actions), add an
+auxiliary head that predicts the player's displacement, and/or use a stronger
+per-action conditioning path than a shared additive embedding. Until then this
+is a convincing video predictor, not a controllable simulator.
 
-A moving enemy makes the copy baseline much weaker here (1.74 versus 1.03 in
-the enemy-free cave), so the one-step scores are nearly tied. The model's
-advantage appears over the rollout, where it keeps the cave, torch, goal and
-enemies coherent.
+#### Optional detail decoder
 
-[`docs/dungeon-enemies-long.mp4`](../docs/dungeon-enemies-long.mp4) is a **30-second,
-360-step** rollout at 12 fps with a labelled action strip. It was generated
-through the interactive player rather than `world-dream`: the Rust frame loader
-uses a fixed 129-step episode stride, so an offline 360-step dream would start
-reading a different episode. The player only needs real frames for the initial
-sync, so it can roll out as long as the environment can generate actions —
-that is also how a game avoids the offline dataset's length limit.
+`world-detail` trains a small residual conv net on (VQ reconstruction, real
+frame) pairs to sharpen edges; `--detail <dir>` applies it to played-back
+dreams. It sharpens real reconstructions but on drifting dream frames it adds
+colour artifacts and slightly worsens MAE, so it is off by default. The honest
+conclusion is that the 4x4-pixel token grid, not the decoder, sets the pixel
+ceiling.
 
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
