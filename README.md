@@ -184,12 +184,13 @@ real room and the dream, with space to re-sync — and a
 
 A **cellular-automata dungeon** uses the identical pixel format and model: a
 64x64 cave carved by the 4-5 rule, a warm torch, collectible cyan diamonds,
-chasing red enemies and a green exit, recorded as flat u8 frames. It trains and
-dreams on the same CLI — see the
+chasing red enemies and a green exit, recorded as flat u8 frames. A 32x32-code
+tokenizer cuts reconstruction error from 5.41 to 2.65, and two generation bugs
+(tiny-pocket starts and predictable actions) were fixed along the way — see the
 [dungeon section](diffusion/README.md#cellular-automata-dungeons) and the
-[60-second rollout](docs/dungeon-diamonds-long.mp4). A diagnostic there shows
-the model is a good video predictor but not yet action-faithful, which is the
-main obstacle to using it as an RL alternative.
+[60-second rollout](docs/dungeon-grid32-long.mp4). The honest caveat is that the
+avatar is controllable but still drifts, so this is a video predictor rather
+than a faithful simulator.
 
 ## Repository layout
 

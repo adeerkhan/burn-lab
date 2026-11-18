@@ -24,6 +24,7 @@ import numpy as np
 DIR_NAMES = ["stay", "up", "down", "left", "right"]
 DELTA = [(0, 0), (0, -1), (0, 1), (-1, 0), (1, 0)]
 GRID = 64
+VIEW = 64
 SCALE = 1
 FLOOR = np.array([40, 46, 62], dtype=np.float32)
 WALL = np.array([158, 144, 124], dtype=np.float32)
@@ -58,6 +59,20 @@ def component(grid: np.ndarray, start: tuple[int, int]) -> set[tuple[int, int]]:
     return seen
 
 
+def largest_component(grid: np.ndarray) -> set[tuple[int, int]]:
+    """Flood-fill every unvisited floor cell and keep the biggest cave."""
+    seen: set[tuple[int, int]] = set()
+    best: set[tuple[int, int]] = set()
+    for y in range(GRID):
+        for x in range(GRID):
+            if grid[y, x] == 0 and (x, y) not in seen:
+                comp = component(grid, (x, y))
+                seen |= comp
+                if len(comp) > len(best):
+                    best = comp
+    return best
+
+
 def bfs_step(grid: np.ndarray, start, goal) -> int:
     """Action id that starts the shortest path, or 0 if unreachable."""
     q = deque([(start, -1)])
@@ -78,27 +93,43 @@ class Dungeon:
     def __init__(self, seed: int, n_enemies: int = 3, n_diamonds: int = 5):
         rng = np.random.default_rng(seed)
         self.rng = rng
-        self.grid = generate(rng)
-        floor = [(x, y) for y in range(GRID) for x in range(GRID) if self.grid[y, x] == 0]
-        if len(floor) < 120:
-            raise RuntimeError("degenerate dungeon")
-        start = floor[int(rng.integers(len(floor)))]
+        # Retry until the largest cave is big enough to navigate; a random
+        # floor cell can otherwise land in a tiny pocket and freeze the player,
+        # which also poisons the recorded actions.
+        for _ in range(12):
+            self.grid = generate(rng)
+            region = largest_component(self.grid)
+            if len(region) >= 700:
+                break
+        else:
+            raise RuntimeError("could not generate a large cave")
+        self.region = region
+
+        def free(cell) -> bool:
+            x, y = cell
+            return 0 <= x < GRID and 0 <= y < GRID and self.grid[y, x] == 0
+
+        open_cells = [c for c in region
+                      if sum(free((c[0] + dx, c[1] + dy)) for dx, dy in DELTA[1:]) >= 3]
+        start = open_cells[int(rng.integers(len(open_cells)))] if open_cells else next(iter(region))
         self.start = start
-        reachable = component(self.grid, start)
-        candidates = [c for c in reachable if abs(c[0] - start[0]) + abs(c[1] - start[1]) > GRID // 2]
-        self.goal = candidates[int(rng.integers(len(candidates)))] if candidates else start
+        far = [c for c in region if abs(c[0] - start[0]) + abs(c[1] - start[1]) > GRID // 2]
+        if not far:
+            far = [c for c in region if c != start]
+        self.goal = far[int(rng.integers(len(far)))]
         self.player = start
-        far = [c for c in reachable if abs(c[0] - start[0]) + abs(c[1] - start[1]) > 10]
-        far = far or list(reachable)
-        rng.shuffle(far)
-        self.enemies = far[: min(n_enemies, len(far))]
-        self.diamonds = far[len(self.enemies): len(self.enemies) + n_diamonds]
+
+        # Spread enemies and diamonds across the cave, away from the start.
+        spots = [c for c in region if abs(c[0] - start[0]) + abs(c[1] - start[1]) > 6]
+        rng.shuffle(spots)
+        self.enemies = spots[: min(n_enemies, len(spots))]
+        self.diamonds = spots[len(self.enemies): len(self.enemies) + n_diamonds]
         self.hits = 0
         self.caught = 0
         self.collected = 0
-        yy, xx = np.mgrid[0:GRID, 0:GRID]
-        self.xs = xx.astype(np.float32)
-        self.ys = yy.astype(np.float32)
+        yy, xx = np.mgrid[0:VIEW * SCALE, 0:VIEW * SCALE]
+        self.px = xx.astype(np.float32)
+        self.py = yy.astype(np.float32)
 
     def _free(self, cell) -> bool:
         x, y = cell
@@ -140,38 +171,53 @@ class Dungeon:
                 self.caught += 1
         return self.render()
 
-    def _blit(self, image: np.ndarray, cell, colour, core=None) -> None:
-        x, y = cell
-        x0, x1 = max(0, x - 1), min(GRID, x + 2)
-        y0, y1 = max(0, y - 1), min(GRID, y + 2)
-        image[y0:y1, x0:x1] = colour
-        if core is not None and 0 <= x < GRID and 0 <= y < GRID:
-            image[y, x] = core
+    def _blit(self, image: np.ndarray, sx: float, sy: float, colour, core=None) -> None:
+        cx, cy = int(round(sx)), int(round(sy))
+        x0, x1 = max(0, cx - 2), min(image.shape[1], cx + 3)
+        y0, y1 = max(0, cy - 2), min(image.shape[0], cy + 3)
+        if x0 < x1 and y0 < y1:
+            image[y0:y1, x0:x1] = colour
+            if core is not None and 0 <= cy < image.shape[0] and 0 <= cx < image.shape[1]:
+                image[cy, cx] = core
 
     def render(self) -> np.ndarray:
-        cells = self.grid
-        variation = (((self.xs * 7 + self.ys * 13).astype(np.int32)) % 9 - 4)[..., None] * 1.6
+        # Camera follows the player, showing 32x32 world cells at 2 px/cell.
+        # The cave is 64x64 cells, so the map is four times larger than the
+        # old full view while walls stay two pixels thick and tokenizable.
+        cx = int(np.clip(self.player[0] - VIEW // 2, 0, GRID - VIEW))
+        cy = int(np.clip(self.player[1] - VIEW // 2, 0, GRID - VIEW))
+        wx = (cx + self.px // SCALE).astype(np.int32)
+        wy = (cy + self.py // SCALE).astype(np.int32)
+        cells = self.grid[wy, wx]
+        variation = (((wx * 7 + wy * 13) % 9 - 4)[..., None]) * 1.6
         image = np.where(cells[..., None] == 0, FLOOR + variation, WALL).astype(np.float32)
 
-        px, py = self.player
-        distance = np.hypot(self.xs - px, self.ys - py)
+        sx = (self.player[0] - cx) * SCALE + 1.0
+        sy = (self.player[1] - cy) * SCALE + 1.0
+        distance = np.hypot(self.px - sx, self.py - sy)
         torch = 0.24 + 0.76 * np.exp(-np.square(distance / 22.0))
         image = image * torch[..., None] + (WARM * 54.0) * (torch * torch)[..., None]
 
+        def glow(x: float, y: float, radius: float, colour) -> None:
+            if -8 < x < VIEW * SCALE + 8 and -8 < y < VIEW * SCALE + 8:
+                falloff = np.exp(-(np.square(self.px - x) + np.square(self.py - y)) / (radius * radius))
+                image[:] += falloff[..., None] * colour
+
         for diamond in self.diamonds:
-            glow = np.exp(-np.square(np.hypot(self.xs - diamond[0], self.ys - diamond[1]) / 2.6))
-            image += glow[..., None] * np.array([40, 150, 190], dtype=np.float32) * 0.5
-            self._blit(image, diamond, np.array([70, 220, 255], dtype=np.float32),
+            ex = (diamond[0] - cx) * SCALE + 1.0
+            ey = (diamond[1] - cy) * SCALE + 1.0
+            glow(ex, ey, 5.0, np.array([40, 150, 190], dtype=np.float32) * 0.5)
+            self._blit(image, ex, ey, np.array([70, 220, 255], dtype=np.float32),
                        np.array([235, 255, 255], dtype=np.float32))
         for enemy in self.enemies:
-            glow = np.exp(-np.square(np.hypot(self.xs - enemy[0], self.ys - enemy[1]) / 2.4))
-            image += glow[..., None] * np.array([190, 30, 40], dtype=np.float32) * 0.45
-            self._blit(image, enemy, np.array([250, 70, 82], dtype=np.float32),
+            ex = (enemy[0] - cx) * SCALE + 1.0
+            ey = (enemy[1] - cy) * SCALE + 1.0
+            glow(ex, ey, 4.5, np.array([190, 30, 40], dtype=np.float32) * 0.45)
+            self._blit(image, ex, ey, np.array([250, 70, 82], dtype=np.float32),
                        np.array([120, 12, 20], dtype=np.float32))
-        self._blit(image, self.goal, np.array([60, 250, 140], dtype=np.float32),
-                   np.array([225, 255, 230], dtype=np.float32))
-        self._blit(image, self.player, np.array([255, 214, 92], dtype=np.float32),
-                   np.array([255, 250, 220], dtype=np.float32))
+        self._blit(image, (self.goal[0] - cx) * SCALE + 1.0, (self.goal[1] - cy) * SCALE + 1.0,
+                   np.array([60, 250, 140], dtype=np.float32), np.array([225, 255, 230], dtype=np.float32))
+        self._blit(image, sx, sy, np.array([255, 214, 92], dtype=np.float32), np.array([255, 250, 220], dtype=np.float32))
         return np.clip(image, 0, 255).astype(np.uint8)
 
 
@@ -195,7 +241,7 @@ def navigate(dungeon: Dungeon, rng: np.random.Generator):
                 continue
         targets = dungeon.diamonds or [dungeon.goal]
         target = min(targets, key=lambda c: abs(c[0] - dungeon.player[0]) + abs(c[1] - dungeon.player[1]))
-        if rng.random() < 0.85:
+        if rng.random() < 0.55:
             yield bfs_step(dungeon.grid, dungeon.player, target)
         else:
             yield int(rng.integers(5))

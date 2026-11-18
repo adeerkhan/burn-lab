@@ -19,6 +19,14 @@ use burn::prelude::*;
 use burn::tensor::activation;
 
 pub const TOKENS: usize = 256;
+
+fn default_tokens() -> usize {
+    TOKENS
+}
+
+fn default_change_prior() -> f32 {
+    -2.0
+}
 pub const ACTIONS: usize = 5;
 pub const NO_ACTION: i64 = ACTIONS as i64;
 
@@ -29,6 +37,12 @@ pub struct WorldConfig {
     pub layers: usize,
     pub heads: usize,
     pub context: usize,
+    /// Tokens per frame: grid x grid (256 for 16x16, 1024 for 32x32).
+    #[serde(default = "default_tokens")]
+    pub tokens: usize,
+    /// Initial logit bias against changing a token. Negative = copy.
+    #[serde(default = "default_change_prior")]
+    pub change_prior: f32,
     /// Predict a change flag plus a new code, falling back to copying the
     /// previous frame's code. Much stronger on a slowly changing room.
     #[serde(default)]
@@ -43,6 +57,8 @@ impl Default for WorldConfig {
             layers: 2,
             heads: 4,
             context: 4,
+            tokens: default_tokens(),
+            change_prior: default_change_prior(),
             residual: false,
         }
     }
@@ -158,7 +174,7 @@ impl WorldModel {
             code: EmbeddingConfig::new(codes + 1, dim).init(device),
             action: EmbeddingConfig::new(ACTIONS + 1, dim).init(device),
             position: Param::from_tensor(Tensor::<2>::random(
-                [TOKENS, dim],
+                [config.tokens, dim],
                 burn::tensor::Distribution::Normal(0.0, 0.02),
                 device,
             )),
@@ -174,7 +190,7 @@ impl WorldModel {
             // unless it learns evidence to the contrary. This makes the copy
             // baseline the starting point rather than something to discover.
             change_head: LinearConfig::new(dim, 1).init(device),
-            change_prior: Param::from_tensor(Tensor::<1>::full([1], -2.0, device)),
+            change_prior: Param::from_tensor(Tensor::<1>::full([1], config.change_prior, device)),
             config: config.clone(),
         }
     }
@@ -191,7 +207,7 @@ impl WorldModel {
         actions: Tensor<2, Int>,
     ) -> (Tensor<4>, Tensor<4>) {
         let [batch, frames, tokens] = seq.dims();
-        assert_eq!(tokens, TOKENS);
+        assert_eq!(tokens, self.config.tokens);
         let code_emb = self.code.forward(seq.reshape([batch * frames, tokens]));
         let mut x = code_emb.reshape([batch, frames, tokens, self.config.dim]);
         x = x
@@ -275,6 +291,7 @@ impl WorldModel {
     ) -> (Tensor<2, Int>, Tensor<2>, Tensor<2>) {
         let device = seq.device();
         let [batch, frames, _] = seq.dims();
+        let tokens = self.config.tokens;
         let codes = self.config.codes;
         let mask = codes as i64;
         let context_values = seq
@@ -290,47 +307,51 @@ impl WorldModel {
                 .convert::<i64>()
                 .try_to_vec::<i64>()
                 .unwrap(),
-            None => vec![mask; batch * TOKENS],
+            None => vec![mask; batch * tokens],
         };
-        let mut values = Vec::with_capacity(batch * (frames + 1) * TOKENS);
+        let mut values = Vec::with_capacity(batch * (frames + 1) * tokens);
         for index in 0..batch {
             values.extend_from_slice(
-                &context_values[index * frames * TOKENS..(index + 1) * frames * TOKENS],
+                &context_values[index * frames * tokens..(index + 1) * frames * tokens],
             );
-            values.extend_from_slice(&target_values[index * TOKENS..(index + 1) * TOKENS]);
+            values.extend_from_slice(&target_values[index * tokens..(index + 1) * tokens]);
         }
         let full = Tensor::<3, Int>::from_data(
-            TensorData::new(values, [batch, frames + 1, TOKENS]),
+            TensorData::new(values, [batch, frames + 1, tokens]),
             &device,
         );
-        let mut acts = actions
-            .clone()
-            .into_data()
-            .convert::<i64>()
-            .try_to_vec::<i64>()
-            .unwrap();
-        acts.extend(vec![NO_ACTION; batch]);
+        // The oldest context frame has no known action; every later frame,
+        // including the target, is preceded by the action that produced it.
+        let mut acts = vec![NO_ACTION; batch];
+        acts.extend(
+            actions
+                .clone()
+                .into_data()
+                .convert::<i64>()
+                .try_to_vec::<i64>()
+                .unwrap(),
+        );
         let actions_full =
             Tensor::<2, Int>::from_data(TensorData::new(acts, [batch, frames + 1]), &device);
         let (logits, change_logits) = self.forward_full(full, actions_full);
-        let target_logits = logits.narrow(1, frames, 1).reshape([batch * TOKENS, codes]);
+        let target_logits = logits.narrow(1, frames, 1).reshape([batch * tokens, codes]);
         let probabilities = activation::softmax(target_logits.clone(), 1);
-        let new_codes = target_logits.argmax(1).reshape([batch * TOKENS]);
+        let new_codes = target_logits.argmax(1).reshape([batch * tokens]);
         let confidence = probabilities
             .gather(1, new_codes.clone().reshape([-1, 1]))
-            .reshape([batch * TOKENS]);
+            .reshape([batch * tokens]);
         let change = change_logits
             .narrow(1, frames, 1)
-            .reshape([batch * TOKENS])
+            .reshape([batch * tokens])
             .into_data()
             .convert::<f32>()
             .try_to_vec::<f32>()
             .unwrap();
         let change_probs: Vec<f32> = change.iter().map(|x| 1.0 / (1.0 + (-x).exp())).collect();
         (
-            new_codes.reshape([batch, TOKENS]),
-            Tensor::<2>::from_data(TensorData::new(change_probs, [batch, TOKENS]), &device),
-            confidence.reshape([batch, TOKENS]),
+            new_codes.reshape([batch, tokens]),
+            Tensor::<2>::from_data(TensorData::new(change_probs, [batch, tokens]), &device),
+            confidence.reshape([batch, tokens]),
         )
     }
 
@@ -361,13 +382,14 @@ impl WorldModel {
         }
         let device = seq.device();
         let batch = seq.dims()[0];
+        let tokens = self.config.tokens;
         let mask = self.config.codes as i64;
-        let mut target = vec![mask; batch * TOKENS];
-        let mut codes = vec![0i64; batch * TOKENS];
-        let mut change_probs = vec![0f32; batch * TOKENS];
+        let mut target = vec![mask; batch * tokens];
+        let mut codes = vec![0i64; batch * tokens];
+        let mut change_probs = vec![0f32; batch * tokens];
         for pass in 1..=passes {
             let target_tensor = Tensor::<2, Int>::from_data(
-                TensorData::new(target.clone(), [batch, TOKENS]),
+                TensorData::new(target.clone(), [batch, tokens]),
                 &device,
             );
             let (new_codes, probs, confidence) =
@@ -401,20 +423,20 @@ impl WorldModel {
                 .try_to_vec::<f32>()
                 .unwrap();
             for item in 0..batch {
-                let mut masked: Vec<(f32, usize)> = (0..TOKENS)
-                    .filter(|&i| target[item * TOKENS + i] == mask)
-                    .map(|i| (conf[item * TOKENS + i], i))
+                let mut masked: Vec<(f32, usize)> = (0..tokens)
+                    .filter(|&i| target[item * tokens + i] == mask)
+                    .map(|i| (conf[item * tokens + i], i))
                     .collect();
                 let count = (fraction * masked.len() as f32).ceil() as usize;
                 masked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
                 for &(_, index) in masked.iter().take(count) {
-                    target[item * TOKENS + index] = codes[item * TOKENS + index];
+                    target[item * tokens + index] = codes[item * tokens + index];
                 }
             }
         }
         (
-            Tensor::<2, Int>::from_data(TensorData::new(codes, [batch, TOKENS]), &device),
-            Tensor::<2>::from_data(TensorData::new(change_probs, [batch, TOKENS]), &device),
+            Tensor::<2, Int>::from_data(TensorData::new(codes, [batch, tokens]), &device),
+            Tensor::<2>::from_data(TensorData::new(change_probs, [batch, tokens]), &device),
         )
     }
 
@@ -436,15 +458,18 @@ mod tests {
             layers: 1,
             heads: 4,
             context: 3,
+            tokens: 256,
+            change_prior: -2.0,
             residual: false,
         };
         let model = WorldModel::new(&config, &device);
-        let seq = Tensor::<3, Int>::zeros([2, 3, TOKENS], &device);
+        let tokens = config.tokens;
+        let seq = Tensor::<3, Int>::zeros([2, 3, tokens], &device);
         let actions = Tensor::<2, Int>::zeros([2, 3], &device);
         let logits = model.forward_seq(seq.clone(), actions.clone());
-        assert_eq!(logits.dims(), [2, 3, TOKENS, 16]);
+        assert_eq!(logits.dims(), [2, 3, tokens, 16]);
         let predicted = model.predict(seq.clone(), actions.clone());
-        assert_eq!(predicted.dims(), [2, TOKENS]);
+        assert_eq!(predicted.dims(), [2, tokens]);
 
         let residual = WorldConfig {
             residual: true,
@@ -452,8 +477,8 @@ mod tests {
         };
         let model = WorldModel::new(&residual, &device);
         let (logits, change) = model.forward_full(seq.clone(), actions.clone());
-        assert_eq!(logits.dims(), [2, 3, TOKENS, 16]);
-        assert_eq!(change.dims(), [2, 3, TOKENS, 1]);
-        assert_eq!(model.predict(seq, actions).dims(), [2, TOKENS]);
+        assert_eq!(logits.dims(), [2, 3, tokens, 16]);
+        assert_eq!(change.dims(), [2, 3, tokens, 1]);
+        assert_eq!(model.predict(seq, actions).dims(), [2, tokens]);
     }
 }

@@ -821,68 +821,77 @@ within 0.3-3.8 MAE out of 255, so the player is not a separate, untested path.
 A second world, generated rather than hand-built, using the **same pixel
 format and the same model**. `scripts/dungeon_env.py` runs the classic cave
 cellular automaton (64x64 cells, random 46% fill, four iterations of the 4-5
-rule) and renders one pixel per cell, so the map is four times larger than the
-earlier 32x32 version at the same 64x64 output. A warm torch follows the
-player, **cyan diamonds** are collectible, **red enemies** wander and chase
-when close, and a **green exit** relocates when reached. The navigator collects
-the nearest diamond, dodges enemies and then heads for the exit. 300 episodes
-x 129 frames were recorded as flat u8/i64 files — no new Rust code was needed;
-the trainers derive the episode count from the file size.
+rule), rendered one pixel per cell with warm torch light, cyan diamonds, red
+enemies and a green exit. 300 episodes x 129 frames are recorded as flat
+u8/i64 files.
 
-![Dungeon with diamonds and enemies](../docs/dungeon-diamonds-long.gif)
+Two generation bugs were fixed after the first dungeon video looked wrong:
+
+- **The start cell could land in a tiny pocket.** The player, enemies and
+  diamonds all clustered in one corner and the player could barely move. The
+  generator now takes the **largest connected cave** (at least 700 cells) and
+  spreads the entities through it.
+- **Actions were almost predictable from the frame.** The BFS navigator's
+  action is a function of its position, so the model could ignore the action
+  input and still predict well. The navigator now acts randomly 45% of the
+  time, so only the action explains the next frame.
+
+The tokenizer was also upgraded from 16x16 to **32x32 codes** (2x2-pixel
+patches) with `--grid 32`. That cuts reconstruction error from **5.41 to 2.65**
+and is the main pixel-quality improvement; the dynamics model and the video
+path are unchanged except for the token count.
+
+![Dungeon with diamonds and enemies](../docs/dungeon-grid32-long.gif)
 
 ```sh
-python3 scripts/dungeon_env.py --episodes 300 --steps 128     --enemies 2 --diamonds 5
-cargo run -p diffusion --release -- world-vq --backend wgpu     --data /tmp/dungeon/data --steps 8000 --dim 48 --timesteps 256     --out /tmp/dungeon/vq
-cargo run -p diffusion --release -- world-encode --backend wgpu     --data /tmp/dungeon/data --ckpt /tmp/dungeon/vq
-cargo run -p diffusion --release -- world-train --backend wgpu     --data /tmp/dungeon/data --steps 2000 --residual --out /tmp/dungeon/wm
+python3 scripts/dungeon_env.py --episodes 300 --steps 128 \
+    --enemies 2 --diamonds 5
+cargo run -p diffusion --release -- world-vq --backend wgpu \
+    --data /tmp/dungeon/data --steps 8000 --dim 48 --timesteps 256 \
+    --grid 32 --out /tmp/dungeon/vq
+cargo run -p diffusion --release -- world-encode --backend wgpu \
+    --data /tmp/dungeon/data --ckpt /tmp/dungeon/vq
+cargo run -p diffusion --release -- world-train --backend wgpu \
+    --data /tmp/dungeon/data --steps 2000 --batch 4 --residual \
+    --change-prior 1.0 --out /tmp/dungeon/wm
 ```
 
-| 64x64 dungeon metric | Value |
+| 64x64 dungeon, 32x32 tokens | Value |
 | --- | ---: |
-| One-step: copy / VQ-VAE ceiling / world model | 1.52 / 5.41 / 1.54 (`--delta-scale 0.1`) |
-| 120-step copy baseline | 7.76 / 3.30 / 13.36 |
-| 120-step dream | 7.80 / 3.75 / 13.85 |
+| One-step: copy / VQ-VAE ceiling / world model | 1.55 / 2.65 / 1.58 |
+| 120-step dream at `--delta-scale 0.1` (stable, almost static) | 6.46 / 18.16 / 25.10 |
 
-The brighter, more detailed cave is harder to tokenize (ceiling 5.41 against
-1.36 in the dark 32x32 version) and the copy baseline is very strong. The dream
-keeps the cave, torch, diamonds, enemies and exit visually coherent but does
-not beat copying on pixel error.
-
-[`docs/dungeon-diamonds-long.mp4`](../docs/dungeon-diamonds-long.mp4) is a
+[`docs/dungeon-grid32-long.mp4`](../docs/dungeon-grid32-long.mp4) is a
 **60-second, 720-step** rollout at 12 fps, re-synced from the real room every
-60 steps. It goes through the interactive player rather than `world-dream`
-because the offline loader assumes 129-step episodes; the player only needs
-real frames at a sync, so rollout length is limited by the environment, not the
-dataset. Re-sync is what keeps a dream coherent for a minute.
+60 steps. It uses `--delta-scale 5` because the change gate otherwise suppresses
+avatar movement almost completely: at scale 1 the player moves under one pixel
+over eight steps, while scale 5 moves it visibly in the action direction but
+drifts much faster. Re-sync is what keeps a minute-long dream watchable.
 
-#### The important negative result: action fidelity
+#### The action-order bug
 
-A simulator is only useful if the action changes the future. It barely does
-here. Previewing or committing actions 1-4 from the same state produces
-trajectories that are almost identical: the yellow player marker moves by a
-fraction of a pixel in the same direction for every action. The model has
-learned the *statistics* of motion, not the *effect* of the action.
+The first attempts at movement failed for a simple reason: at inference the
+**target frame was always given `NO_ACTION`**. `predict_pass` appended the
+no-action sentinel after the context actions, so the action that should have
+produced the next frame was assigned to the last context frame instead. Training
+used the correct action, so the model had learned action effects that playback
+never used. Prepending the sentinel fixed the mapping; a multi-step test then
+showed actions 1 and 3 producing different trajectories for the first time.
 
-That is expected given the data: the scripted navigator's action is almost
-determined by its position and the BFS path, so the model can predict the next
-frame from context alone and ignore the action embedding. The no-change prior
-and the residual target make that even easier. For a world model to rival
-reinforcement learning it has to pass this test first — an action must be the
-only explanation for the next frame. The fixes are concrete: record
-**counterfactual** branches (the same state with all five actions), add an
-auxiliary head that predicts the player's displacement, and/or use a stronger
-per-action conditioning path than a shared additive embedding. Until then this
-is a convincing video predictor, not a controllable simulator.
+The loss also now upweights tokens that contain the player, enemies, diamonds
+or exit by 30x, because those markers are under 1% of the frame and were being
+ignored. `--change-prior` exposes the copy bias (default -2.0; the dungeon uses
++1.0).
 
-#### Optional detail decoder
+#### The honest limitation
 
-`world-detail` trains a small residual conv net on (VQ reconstruction, real
-frame) pairs to sharpen edges; `--detail <dir>` applies it to played-back
-dreams. It sharpens real reconstructions but on drifting dream frames it adds
-colour artifacts and slightly worsens MAE, so it is off by default. The honest
-conclusion is that the 4x4-pixel token grid, not the decoder, sets the pixel
-ceiling.
+Even with the fix, action fidelity is weak. The avatar moves, but it does not
+track the real player well, and at scales large enough to see the motion the
+cave itself drifts. This is a **video predictor with a controllable avatar**,
+not yet a faithful simulator: exactly the gap that has to close before a world
+model can replace RL. The concrete next step is an explicit position head
+trained on recorded player coordinates, which would decouple avatar motion
+from the pixel-level change gate.
 
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is

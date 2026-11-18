@@ -65,12 +65,13 @@ pub struct VqVae {
     encoder_out: Conv2d,
     decoder_in: Conv2d,
     decoder_res: Vec<ResBlock>,
-    decoder_up1: ConvTranspose2d,
-    decoder_up2: ConvTranspose2d,
+    decoder_up: Vec<ConvTranspose2d>,
     decoder_out: Conv2d,
     codebook: Param<Tensor<2>>,
     ema_count: Param<Tensor<1>>,
     ema_sum: Param<Tensor<2>>,
+    #[module(skip)]
+    levels: usize,
     #[module(skip)]
     config: VqConfig,
 }
@@ -93,27 +94,23 @@ impl VqVae {
     pub fn new(config: &VqConfig, device: &Device) -> Self {
         let c = config.channels;
         let d = config.dim;
-        let encoder = vec![
+        // 64x64 -> grid x grid needs log2(64/grid) stride-2 stages.
+        let levels = (64 / config.grid).ilog2() as usize;
+        let mut encoder = vec![
             Conv2dConfig::new([c, d], [3, 3])
                 .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
                 .init(device),
-            down(d, d, device),
-            down(d, d, device),
         ];
-        let encoder_res = vec![
-            ResBlock::new(d, device),
-            ResBlock::new(d, device),
-            ResBlock::new(d, device),
-        ];
+        let mut encoder_res = vec![ResBlock::new(d, device)];
+        for _ in 0..levels {
+            encoder.push(down(d, d, device));
+            encoder_res.push(ResBlock::new(d, device));
+        }
         let encoder_out = Conv2dConfig::new([d, d], [1, 1]).init(device);
         let decoder_in = Conv2dConfig::new([d, d], [3, 3])
             .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
             .init(device);
-        let decoder_res = vec![
-            ResBlock::new(d, device),
-            ResBlock::new(d, device),
-            ResBlock::new(d, device),
-        ];
+        let decoder_res = (0..=levels).map(|_| ResBlock::new(d, device)).collect();
         let codebook = Param::from_tensor(Tensor::<2>::random(
             [config.codes, d],
             burn::tensor::Distribution::Normal(0.0, 0.1),
@@ -127,14 +124,14 @@ impl VqVae {
             encoder_out,
             decoder_in,
             decoder_res,
-            decoder_up1: up(d, d, device),
-            decoder_up2: up(d, d, device),
+            decoder_up: (0..levels).map(|_| up(d, d, device)).collect(),
             decoder_out: Conv2dConfig::new([d, c], [3, 3])
                 .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
                 .init(device),
             codebook,
             ema_count,
             ema_sum,
+            levels,
             config: config.clone(),
         }
     }
@@ -146,18 +143,20 @@ impl VqVae {
     pub fn encode(&self, x: Tensor<4>) -> Tensor<4> {
         let mut h = self.encoder[0].forward(x);
         h = self.encoder_res[0].forward(h);
-        h = self.encoder_res[1].forward(self.encoder[1].forward(h));
-        h = self.encoder_res[2].forward(self.encoder[2].forward(h));
+        for level in 0..self.levels {
+            h = self.encoder[level + 1].forward(h);
+            h = self.encoder_res[level + 1].forward(h);
+        }
         self.encoder_out.forward(h)
     }
 
     pub fn decode(&self, z: Tensor<4>) -> Tensor<4> {
         let mut h = self.decoder_in.forward(z);
         h = self.decoder_res[0].forward(h);
-        h = self.decoder_up1.forward(h);
-        h = self.decoder_res[1].forward(h);
-        h = self.decoder_up2.forward(h);
-        h = self.decoder_res[2].forward(h);
+        for level in 0..self.levels {
+            h = self.decoder_up[level].forward(h);
+            h = self.decoder_res[level + 1].forward(h);
+        }
         self.decoder_out.forward(h)
     }
 

@@ -16,7 +16,7 @@ use diffusion::flow::{
 use diffusion::unet::{Unet, UnetConfig};
 use diffusion::vit::{AttentionKind, Vit, VitConfig};
 use diffusion::vit_classifier::{ClassifierConfig, VitClassifier};
-use diffusion::world_model::{TOKENS, WorldConfig, WorldModel};
+use diffusion::world_model::{WorldConfig, WorldModel};
 use diffusion::world_vq::{VqConfig, VqVae, edge_loss};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -163,6 +163,8 @@ struct Options {
     passes: usize,
     token_feedback: bool,
     detail: String,
+    grid: usize,
+    change_prior: f32,
 }
 
 impl Default for Options {
@@ -210,6 +212,8 @@ impl Default for Options {
             passes: 4,
             token_feedback: false,
             detail: String::new(),
+            grid: 16,
+            change_prior: -2.0,
         }
     }
 }
@@ -276,6 +280,8 @@ impl Options {
                 "--passes" => options.passes = value().parse().expect("pass count"),
                 "--token-feedback" => options.token_feedback = true,
                 "--detail" => options.detail = value(),
+                "--grid" => options.grid = value().parse().expect("grid size"),
+                "--change-prior" => options.change_prior = value().parse().expect("change prior"),
                 "--world-noise" => options.world_noise = value().parse().expect("world noise"),
                 "--clean-p" => options.clean_p = value().parse().expect("clean probability"),
                 "--attention" => {
@@ -609,6 +615,7 @@ fn train_world_vq(options: &Options) {
         } else {
             64
         },
+        grid: options.grid,
         ..VqConfig::default()
     };
     let mut model = VqVae::new(&config, &device);
@@ -742,11 +749,13 @@ fn train_world_model(options: &Options) {
         layers: options.depth.min(4),
         heads: options.heads.min(8),
         context: 4,
+        tokens: tokenizer_config.grid * tokenizer_config.grid,
+        change_prior: options.change_prior,
         residual: options.residual,
     };
     let mut model = WorldModel::new(&config, &device);
     let mut optimizer = AdamWConfig::new().init();
-    let total = std::fs::metadata(&token_path).unwrap().len() as usize / (8 * TOKENS);
+    let total = std::fs::metadata(&token_path).unwrap().len() as usize / (8 * config.tokens);
     println!(
         "world model dim={} layers={} heads={} tokens={}",
         config.dim, config.layers, config.heads, total
@@ -754,7 +763,7 @@ fn train_world_model(options: &Options) {
 
     let started = std::time::Instant::now();
     for step in 1..=options.steps {
-        let (seq, actions, targets, copy_source) = world_batch(
+        let (seq, actions, targets, copy_source, weights) = world_batch(
             WorldBatchArgs {
                 mask: config.codes as i64,
                 tokens_path: &token_path,
@@ -765,6 +774,9 @@ fn train_world_model(options: &Options) {
                 seed: options.seed + step as u64,
                 noise: options.world_noise,
                 clean_p: options.clean_p,
+                tokens: config.tokens,
+                grid: tokenizer_config.grid,
+                frames_path: &format!("{prefix}/frames.bin"),
             },
             &device,
         );
@@ -799,17 +811,24 @@ fn train_world_model(options: &Options) {
                 .collect();
             let change_target = Tensor::<1>::from_data(TensorData::new(changed, [count]), &device);
             let change_prob = burn::tensor::activation::sigmoid(change_logits.reshape([count]));
+            let weights = weights.reshape([count]);
+            let weighted = change_target.clone().mul(weights.clone());
+            let ce_changed = ce
+                .mul(weighted.clone())
+                .mean()
+                .div(weighted.mean().clamp_min(1e-6));
             let bce = change_prob
                 .sub(change_target.clone())
                 .powf_scalar(2.0)
-                .mean();
-            let ce_changed = ce
-                .mul(change_target.clone())
+                .mul(weights.clone())
                 .mean()
-                .div(change_target.mean().clamp_min(1e-6));
+                .div(weights.mean().clamp_min(1e-6));
             ce_changed.add(bce.mul_scalar(0.5))
         } else {
-            ce.mean()
+            let weights = weights.reshape([batch * frames * tokens]);
+            ce.mul(weights.clone())
+                .mean()
+                .div(weights.mean().clamp_min(1e-6))
         };
         let value = loss.clone().into_scalar::<f32>();
         let grads = GradientsParams::from_grads(loss.backward(), &model);
@@ -874,6 +893,7 @@ fn world_ceiling(options: &Options) {
     );
 
     let recorded = std::fs::read(format!("{prefix}/actions.bin")).expect("read actions");
+    let tokens = wm_config.tokens;
     let episodes = (recorded.len() / 128).max(1);
     let context = wm_config.context;
     let samples = options.steps.max(1);
@@ -890,7 +910,7 @@ fn world_ceiling(options: &Options) {
                 time - context + slot,
                 &device,
             );
-            ids.push(vq.ids(vq.encode(frame)).reshape([TOKENS]));
+            ids.push(vq.ids(vq.encode(frame)).reshape([tokens]));
             // One action per context frame; the oldest has no known action.
             if slot == 0 {
                 acts.push(5); // NO_ACTION
@@ -909,7 +929,7 @@ fn world_ceiling(options: &Options) {
                             .unwrap()
                     })
                     .collect::<Vec<_>>(),
-                [1, context, TOKENS],
+                [1, context, tokens],
             ),
             &device,
         );
@@ -921,6 +941,7 @@ fn world_ceiling(options: &Options) {
             &vq,
             &wm,
             ResidualDecode {
+                tokens,
                 copy_ids: ids.last().unwrap().clone(),
                 new_ids,
                 probs,
@@ -929,7 +950,7 @@ fn world_ceiling(options: &Options) {
                 device: &device,
             },
         );
-        let real_tokens = vq.ids(vq.encode(real.clone())).reshape([TOKENS, 1]);
+        let real_tokens = vq.ids(vq.encode(real.clone())).reshape([tokens, 1]);
         let recon = vq.decode_ids(real_tokens);
         let mae = |a: &Tensor<4>, b: &Tensor<4>| {
             a.clone().sub(b.clone()).abs().mean().into_scalar::<f32>() * 127.5
@@ -954,6 +975,7 @@ fn world_ceiling(options: &Options) {
 /// 5.67 MAE even on a real frame, so decoding from scratch can never beat a
 /// copy; anchoring on the real pixels can.
 struct ResidualDecode<'a> {
+    tokens: usize,
     copy_ids: Tensor<1, Int>,
     new_ids: Tensor<2, Int>,
     probs: Tensor<2>,
@@ -964,10 +986,10 @@ struct ResidualDecode<'a> {
 
 fn decode_world_prediction(vq: &VqVae, wm: &WorldModel, args: ResidualDecode<'_>) -> Tensor<4> {
     if !wm.config().residual {
-        return vq.decode_ids(args.new_ids.reshape([TOKENS, 1]));
+        return vq.decode_ids(args.new_ids.reshape([args.tokens, 1]));
     }
-    let new_image = vq.decode_ids(args.new_ids.reshape([TOKENS, 1]));
-    let copy_image = vq.decode_ids(args.copy_ids.reshape([TOKENS, 1]));
+    let new_image = vq.decode_ids(args.new_ids.reshape([args.tokens, 1]));
+    let copy_image = vq.decode_ids(args.copy_ids.reshape([args.tokens, 1]));
     let delta = new_image.sub(copy_image);
     let values = args
         .probs
@@ -1030,6 +1052,7 @@ fn dream_rollout(options: &Options) {
             .allow_partial(true),
     );
     let detail = load_detail(&options.detail, &device);
+    let tokens = wm_config.tokens;
 
     let context = wm_config.context;
     let steps = options.steps.max(1);
@@ -1041,7 +1064,7 @@ fn dream_rollout(options: &Options) {
     let mut actions: Vec<i64> = Vec::new();
     for time in 0..context {
         let frame = world_frame_at(&format!("{prefix}/frames.bin"), 0, time, &device);
-        let ids = vq.ids(vq.encode(frame)).reshape([TOKENS]);
+        let ids = vq.ids(vq.encode(frame)).reshape([tokens]);
         history.push(ids);
         if time > 0 {
             actions.push(recorded[time - 1] as i64);
@@ -1064,7 +1087,7 @@ fn dream_rollout(options: &Options) {
                             .unwrap()
                     })
                     .collect::<Vec<_>>(),
-                [1, context, TOKENS],
+                [1, context, tokens],
             ),
             &device,
         );
@@ -1077,6 +1100,7 @@ fn dream_rollout(options: &Options) {
             &vq,
             &wm,
             ResidualDecode {
+                tokens,
                 copy_ids: history.last().unwrap().clone(),
                 new_ids: new_ids.clone(),
                 probs,
@@ -1115,9 +1139,9 @@ fn dream_rollout(options: &Options) {
         // re-encode round trip each step, which adds quantisation error to
         // the context on every frame of a long rollout.
         let next = if options.token_feedback {
-            new_ids.reshape([TOKENS])
+            new_ids.reshape([tokens])
         } else {
-            vq.ids(vq.encode(dream.clone())).reshape([TOKENS])
+            vq.ids(vq.encode(dream.clone())).reshape([tokens])
         };
         history.remove(0);
         history.push(next);
@@ -1245,6 +1269,7 @@ struct PlayPredict<'a> {
 /// Predict the next dream frame for a candidate action without touching the
 /// caller's state. Used by both `a` (commit) and `p` (preview for planning).
 fn play_predict(args: PlayPredict<'_>, action: i64) -> Tensor<4> {
+    let tokens = args.wm.config().tokens;
     let mut actions = args.actions.to_vec();
     actions.push(action);
     let seq = Tensor::<3, Int>::from_data(
@@ -1259,7 +1284,7 @@ fn play_predict(args: PlayPredict<'_>, action: i64) -> Tensor<4> {
                         .unwrap()
                 })
                 .collect::<Vec<_>>(),
-            [1, args.context, TOKENS],
+            [1, args.context, tokens],
         ),
         args.device,
     );
@@ -1272,6 +1297,7 @@ fn play_predict(args: PlayPredict<'_>, action: i64) -> Tensor<4> {
         args.vq,
         args.wm,
         ResidualDecode {
+            tokens: args.wm.config().tokens,
             copy_ids: args.history.last().unwrap().clone(),
             new_ids,
             probs,
@@ -1331,6 +1357,7 @@ fn world_play(options: &Options) {
             .allow_partial(true),
     );
     let detail = load_detail(&options.detail, &device);
+    let tokens = wm.config().tokens;
     let context = wm_config.context;
     let recorded = std::fs::read(format!("{prefix}/actions.bin")).expect("read actions");
     let mut history: Vec<Tensor<1, Int>> = Vec::new();
@@ -1338,7 +1365,7 @@ fn world_play(options: &Options) {
     let mut anchor = world_frame_at(&format!("{prefix}/frames.bin"), 0, context - 1, &device);
     for time in 0..context {
         let frame = world_frame_at(&format!("{prefix}/frames.bin"), 0, time, &device);
-        history.push(vq.ids(vq.encode(frame)).reshape([TOKENS]));
+        history.push(vq.ids(vq.encode(frame)).reshape([tokens]));
         if time > 0 {
             actions.push(recorded[time - 1] as i64);
         }
@@ -1367,7 +1394,7 @@ fn world_play(options: &Options) {
                     if index + 1 == count {
                         anchor = frame.clone();
                     }
-                    history.push(vq.ids(vq.encode(frame)).reshape([TOKENS]));
+                    history.push(vq.ids(vq.encode(frame)).reshape([tokens]));
                     if index > 0 {
                         actions.push(record[0] as i64);
                     }
@@ -1391,7 +1418,7 @@ fn world_play(options: &Options) {
                 let display = play_display(detail.as_ref(), dream.clone());
                 if command == "a" {
                     anchor = dream.clone();
-                    history.push(vq.ids(vq.encode(dream.clone())).reshape([TOKENS]));
+                    history.push(vq.ids(vq.encode(dream.clone())).reshape([tokens]));
                     history.remove(0);
                     actions.remove(0);
                     actions.push(action);
@@ -1421,6 +1448,9 @@ struct WorldBatchArgs<'a> {
     seed: u64,
     noise: f32,
     clean_p: f32,
+    tokens: usize,
+    grid: usize,
+    frames_path: &'a str,
 }
 
 fn world_batch(
@@ -1431,16 +1461,20 @@ fn world_batch(
     Tensor<2, Int>,
     Tensor<3, Int>,
     Tensor<3, Int>,
+    Tensor<3>,
 ) {
     use std::io::{Read, Seek, SeekFrom};
     let mut tokens_file = std::fs::File::open(args.tokens_path).expect("open tokens");
     let mut actions_file = std::fs::File::open(args.actions_path).expect("open actions");
     let mut rng = diffusion::data::Rng::new(args.seed);
     let frames = args.context + 1;
-    let mut seq = Vec::with_capacity(args.batch * frames * TOKENS);
+    let tokens = args.tokens;
+    let mut seq = Vec::with_capacity(args.batch * frames * tokens);
     let mut acts = Vec::with_capacity(args.batch * frames);
-    let mut targets = Vec::with_capacity(args.batch * frames * TOKENS);
-    let mut copy = Vec::with_capacity(args.batch * frames * TOKENS);
+    let mut targets = Vec::with_capacity(args.batch * frames * tokens);
+    let mut copy = Vec::with_capacity(args.batch * frames * tokens);
+    let mut weights = Vec::with_capacity(args.batch * frames * tokens);
+    let mut frames_file = std::fs::File::open(args.frames_path).expect("open frames");
 
     for _ in 0..args.batch {
         let mut previous: Option<Vec<i64>> = None;
@@ -1448,11 +1482,40 @@ fn world_batch(
         let time = rng.below(128 - frames) + frames;
         for slot in 0..frames {
             let index = episode * 129 + time - frames + slot;
-            let mut raw = vec![0u8; TOKENS * 8];
+            let mut raw = vec![0u8; tokens * 8];
             tokens_file
-                .seek(SeekFrom::Start((index * TOKENS * 8) as u64))
+                .seek(SeekFrom::Start((index * tokens * 8) as u64))
                 .expect("seek tokens");
             tokens_file.read_exact(&mut raw).expect("read tokens");
+            let mut frame = vec![0u8; 3 * 64 * 64];
+            frames_file
+                .seek(SeekFrom::Start((index * 3 * 64 * 64) as u64))
+                .expect("seek frame");
+            frames_file.read_exact(&mut frame).expect("read frame");
+            let patch = (64 / args.grid).max(1);
+            for ty in 0..args.grid {
+                for tx in 0..args.grid {
+                    let mut entity = false;
+                    for py in 0..patch {
+                        for px in 0..patch {
+                            let at = 3 * ((ty * patch + py) * 64 + tx * patch + px);
+                            let (r, g, b) = (frame[at], frame[at + 1], frame[at + 2]);
+                            let yellow = r > 230 && g > 190 && b < 130;
+                            let red = r > 230 && g < 110 && b < 120;
+                            let cyan = b > 220 && g > 190 && r < 130;
+                            let green = g > 230 && r < 130 && b < 180;
+                            if yellow || red || cyan || green {
+                                entity = true;
+                                break;
+                            }
+                        }
+                        if entity {
+                            break;
+                        }
+                    }
+                    weights.push(if entity { 30.0 } else { 1.0 });
+                }
+            }
             let values: Vec<i64> = raw
                 .as_chunks::<8>()
                 .0
@@ -1508,13 +1571,17 @@ fn world_batch(
         }
     }
     (
-        Tensor::<3, Int>::from_data(TensorData::new(seq, [args.batch, frames, TOKENS]), device),
+        Tensor::<3, Int>::from_data(TensorData::new(seq, [args.batch, frames, tokens]), device),
         Tensor::<2, Int>::from_data(TensorData::new(acts, [args.batch, frames]), device),
         Tensor::<3, Int>::from_data(
-            TensorData::new(targets, [args.batch, frames, TOKENS]),
+            TensorData::new(targets, [args.batch, frames, tokens]),
             device,
         ),
-        Tensor::<3, Int>::from_data(TensorData::new(copy, [args.batch, frames, TOKENS]), device),
+        Tensor::<3, Int>::from_data(TensorData::new(copy, [args.batch, frames, tokens]), device),
+        Tensor::<3>::from_data(
+            TensorData::new(weights, [args.batch, frames, tokens]),
+            device,
+        ),
     )
 }
 
