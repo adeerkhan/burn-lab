@@ -590,8 +590,12 @@ fn train_world_vq(options: &Options) {
     } else {
         options.data.clone()
     };
-    let episodes = 400;
     let steps_per_episode = 129;
+    let episodes = (std::fs::metadata(format!("{prefix}/frames.bin"))
+        .expect("frame file")
+        .len() as usize
+        / (3 * 64 * 64 * steps_per_episode))
+        .max(1);
     let frames = episodes * steps_per_episode;
     let config = VqConfig {
         dim: options.dim.min(64),
@@ -612,7 +616,7 @@ fn train_world_vq(options: &Options) {
     let started = std::time::Instant::now();
     for step in 1..=options.steps {
         let mut rng = diffusion::data::Rng::new(options.seed + step as u64);
-        let episode = rng.below(380);
+        let episode = rng.below(episodes.saturating_sub(10).max(1));
         let time = rng.below(128);
         let x = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
         let (recon, _, commit) = model.forward(x.clone());
@@ -673,8 +677,12 @@ fn encode_world_tokens(options: &Options) {
     let record = ModuleRecord::load(format!("{checkpoints}/model")).expect("load tokenizer");
     model = model.load_record(record);
 
-    let episodes = 400;
-    let steps = 129;
+    let steps = 129usize;
+    let episodes = (std::fs::metadata(format!("{prefix}/frames.bin"))
+        .expect("frame file")
+        .len() as usize
+        / (3 * 64 * 64 * steps))
+        .max(1);
     let mut file =
         std::fs::File::create(format!("{prefix}/tokens.bin")).expect("create token file");
     let started = std::time::Instant::now();
@@ -861,11 +869,12 @@ fn world_ceiling(options: &Options) {
     );
 
     let recorded = std::fs::read(format!("{prefix}/actions.bin")).expect("read actions");
+    let episodes = (recorded.len() / 128).max(1);
     let context = wm_config.context;
     let samples = options.steps.max(1);
     let mut errors = (0.0f32, 0.0f32, 0.0f32);
     for index in 0..samples {
-        let episode = index % 370;
+        let episode = index % episodes;
         let time = context + (index * 7) % (128 - context);
         let mut ids = Vec::new();
         let mut acts = Vec::new();

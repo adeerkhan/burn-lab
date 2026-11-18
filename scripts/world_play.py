@@ -34,7 +34,7 @@ FRAME_BYTES = 3 * 64 * 64
 class DreamClient:
     """Line-based command protocol to the Rust inference server."""
 
-    def __init__(self, binary: str, ckpt: str, eval_data: str, data: str, passes: int | None):
+    def __init__(self, binary: str, ckpt: str, eval_data: str, data: str, passes: int | None, delta_scale: float | None = None):
         cmd = [
             binary, "world-play", "--backend", "wgpu",
             "--ckpt", ckpt, "--eval-data", eval_data,
@@ -43,6 +43,8 @@ class DreamClient:
             cmd += ["--data", data]
         if passes is not None:
             cmd += ["--passes", str(passes)]
+        if delta_scale is not None:
+            cmd += ["--delta-scale", str(delta_scale)]
         self.process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 
     def action(self, action: int) -> np.ndarray:
@@ -73,9 +75,14 @@ class DreamClient:
             self.process.kill()
 
 
-def make_env(seed: int, context: int, recorded: np.ndarray | None):
-    env = FireflyRoom(seed=seed)
-    frames = [env.reset()]
+def make_env(seed: int, context: int, recorded: np.ndarray | None, kind: str = "firefly"):
+    if kind == "dungeon":
+        from dungeon_env import Dungeon
+        env = Dungeon(seed=seed)
+        frames = [env.render()]
+    else:
+        env = FireflyRoom(seed=seed)
+        frames = [env.reset()]
     actions = []
     for t in range(context - 1):
         action = int(recorded[t]) if recorded is not None else 0
@@ -90,7 +97,7 @@ def headless(args, client: DreamClient) -> None:
         [int(line) for line in Path(args.script).read_text().split() if line.strip()]
         if args.script else list(recorded[:args.steps]) if recorded is not None else [0] * args.steps
     )
-    env, real_frames, actions = make_env(args.seed, args.context, recorded)
+    env, real_frames, actions = make_env(args.seed, args.context, recorded, args.env)
     client.sync([(0, real_frames[0])] + [(actions[i - 1], real_frames[i]) for i in range(1, len(real_frames))])
     args.frames.mkdir(parents=True, exist_ok=True)
     for step, action in enumerate(script[: args.steps]):
@@ -124,7 +131,7 @@ def interactive(args, client: DreamClient) -> None:
     if args.actions:
         all_actions = np.fromfile(args.actions, dtype=np.uint8)
         recorded = all_actions[episode * 128:(episode + 1) * 128]
-    env, real_frames, actions = make_env(episode, args.context, recorded)
+    env, real_frames, actions = make_env(episode, args.context, recorded, args.env)
     client.sync([(0, real_frames[0])] + [(actions[i - 1], real_frames[i]) for i in range(1, len(real_frames))])
     keymap = {
         pygame.K_UP: 1, pygame.K_DOWN: 2, pygame.K_LEFT: 3, pygame.K_RIGHT: 4,
@@ -164,7 +171,7 @@ def interactive(args, client: DreamClient) -> None:
                 if args.actions:
                     all_actions = np.fromfile(args.actions, dtype=np.uint8)
                     recorded = all_actions[episode * 128:(episode + 1) * 128]
-                env, real_frames, actions = make_env(episode, args.context, recorded)
+                env, real_frames, actions = make_env(episode, args.context, recorded, args.env)
                 client.sync([(0, real_frames[0])] + [(actions[i - 1], real_frames[i]) for i in range(1, len(real_frames))])
                 step = 0
         clock.tick(30)
@@ -179,6 +186,8 @@ def main() -> None:
     ap.add_argument("--data", default="/home/adeerkhan/tmp/world/data")
     ap.add_argument("--actions", default="/home/adeerkhan/tmp/world/data/actions.bin")
     ap.add_argument("--passes", type=int, default=None)
+    ap.add_argument("--delta-scale", type=float, default=None)
+    ap.add_argument("--env", choices=["firefly", "dungeon"], default="firefly")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--context", type=int, default=4)
     ap.add_argument("--steps", type=int, default=120)
@@ -186,7 +195,7 @@ def main() -> None:
     ap.add_argument("--frames", type=Path, default=None)
     args = ap.parse_args()
 
-    client = DreamClient(args.binary, args.ckpt, args.eval_data, args.data, args.passes)
+    client = DreamClient(args.binary, args.ckpt, args.eval_data, args.data, args.passes, args.delta_scale)
     try:
         if args.script or args.frames:
             if args.frames is None:

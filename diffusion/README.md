@@ -816,6 +816,53 @@ records `[real | dream]` strips without a display. That mode was used to check
 that the interactive loop reproduces the offline `world-dream` rollout to
 within 0.3-3.8 MAE out of 255, so the player is not a separate, untested path.
 
+### Cellular-automata dungeons
+
+A second world, generated rather than hand-built, using the **same pixel
+format and the same model**. `scripts/dungeon_env.py` runs the classic cave
+cellular automaton (32x32 cells, random 45% fill, four iterations of the 4-5
+rule), then drops a torch-lit player into the largest open region with a green
+goal cell. A scripted navigator follows a BFS path 82% of the time and explores
+randomly otherwise. 300 episodes x 129 frames were recorded as flat u8/i64
+files under `/home/adeerkhan/tmp/dungeon/data` — no new Rust code was needed;
+the trainers now derive the episode count from the file size instead of
+assuming 400.
+
+![Dungeon real room and dream](../docs/dungeon-dream.gif)
+
+```sh
+python3 scripts/dungeon_env.py --episodes 300 --steps 128
+cargo run -p diffusion --release -- world-vq --backend wgpu \
+    --data /tmp/dungeon/data --steps 8000 --dim 48 --timesteps 256 \
+    --out /tmp/dungeon/vq
+cargo run -p diffusion --release -- world-encode --backend wgpu \
+    --data /tmp/dungeon/data --ckpt /tmp/dungeon/vq
+cargo run -p diffusion --release -- world-train --backend wgpu \
+    --data /tmp/dungeon/data --steps 2000 --residual --out /tmp/dungeon/wm
+cargo run -p diffusion --release -- world-dream --backend wgpu \
+    --data /tmp/dungeon/data --delta-scale 0.1 \
+    --ckpt /tmp/dungeon/wm --eval-data /tmp/dungeon/vq
+```
+
+| Dungeon metric | Value |
+| --- | ---: |
+| One-step: copy / VQ-VAE ceiling / world model | 1.03 / 1.36 / 1.15 (`--delta-scale 0.1`) |
+| 120-step copy-last baseline | 5.49 / 10.74 / 11.16 |
+| 120-step dream (`--delta-scale 0.1`) | **5.77 / 10.53 / 12.14** |
+| Tokenizer reconstruction loss, 8k steps | ~0.04 |
+
+The dungeon is much easier than the FireflyRoom in MAE terms because most of
+the frame is dark, but it exposes a different failure: at the default
+`--delta-scale 0.5` the dream becomes speckled, because wrong codes in the dark
+areas cost almost no pixel error, so the model is free to drift into noise.
+Lowering the delta scale to 0.1 anchors it to the previous frame and restores
+clean walls, torch and goal. This is a useful reminder that MAE alone does not
+measure structural correctness.
+
+Navigation is interactive too: `scripts/world_play.py --env dungeon --data
+/tmp/dungeon/data --ckpt /tmp/dungeon/wm --eval-data /tmp/dungeon/vq` drives the
+real dungeon and the dream with the same arrow keys, with space to re-sync.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer

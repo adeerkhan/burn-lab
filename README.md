@@ -182,6 +182,12 @@ reconstruction alone does not improve a long dream. There is also a
 real room and the dream, with space to re-sync — and a
 [10-second playthrough](docs/world-play.mp4).
 
+A **cellular-automata dungeon** uses the identical pixel format and model: a
+32x32 cave carved by the 4-5 rule, a torch-lit navigator and a goal cell,
+recorded as flat u8 frames. It trains and dreams on the same CLI — see the
+[dungeon section](diffusion/README.md#cellular-automata-dungeons) and the
+[real-vs-dream clip](docs/dungeon-dream.mp4).
+
 ## Repository layout
 
 ```
