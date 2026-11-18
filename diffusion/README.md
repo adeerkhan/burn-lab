@@ -782,6 +782,40 @@ that the model adds value over a trivial predictor late in a rollout. This is a
 better way to judge the work than a two-panel clip because the trivial baseline
 is always visible as a control.
 
+### Playable demo
+
+The reference's headline is that the dream is *playable*, not just viewable. We
+now have that too. A 10-second playthrough is in
+[`docs/world-play.mp4`](../docs/world-play.mp4); it was produced by the headless
+mode of the player, so it is the same code path a human drives.
+
+`world-play` is a small inference server: it loads the tokenizer and world
+model once, then reads commands from stdin and streams one 64x64 RGB dream
+frame per action. `scripts/world_play.py` drives the real FireflyRoom next to
+it and sends the same key presses to both:
+
+```sh
+# install once for the interactive window (headless mode needs no pygame)
+python3 -m pip install pygame-ce
+
+python3 scripts/world_play.py \
+    --ckpt /tmp/world/wm6-residual --eval-data /tmp/world/vq2
+```
+
+Controls: arrow keys move/turn the flashlight, **space** re-syncs the dream
+from the real room's last four frames, **n** starts a new room, **q** quits.
+Both rooms get identical actions; after the four-frame warm-up the model only
+ever sees its own predictions. Re-sync is what makes a long game viable: once
+the dream drifts past the point of usefulness, a real frame resets its context
+without restarting the episode. The reference has a manual re-sync key; here it
+sends the real frames over the same protocol, so it works even after actions
+that were never recorded.
+
+For scripted runs, `--script actions.txt --frames /tmp/play --steps 120`
+records `[real | dream]` strips without a display. That mode was used to check
+that the interactive loop reproduces the offline `world-dream` rollout to
+within 0.3-3.8 MAE out of 255, so the player is not a separate, untested path.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer

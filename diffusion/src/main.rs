@@ -397,6 +397,7 @@ fn main() {
         "world-encode" => encode_world_tokens(&options),
         "world-dream" => dream_rollout(&options),
         "world-ceiling" => world_ceiling(&options),
+        "world-play" => world_play(&options),
         "make-pairs" => make_pairs(&options),
         other => panic!("unknown command `{other}`; see README for the command list"),
     }
@@ -1109,6 +1110,177 @@ fn dream_rollout(options: &Options) {
     let (early, mid, late) = (mean(0..10), mean(10..30), mean(30..errors.len()));
     println!("dream MAE (0-255): steps 1-10 {early:.2}, 11-30 {mid:.2}, 31+ {late:.2}");
     leave_after_writing();
+}
+
+/// Convert a `[1, 3, 64, 64]` frame in [-1, 1] to interleaved RGB u8 bytes.
+fn frame_to_rgb_u8(frame: Tensor<4>) -> Vec<u8> {
+    let [batch, channels, height, width] = frame.dims();
+    let values = frame
+        .into_data()
+        .convert::<f32>()
+        .try_to_vec::<f32>()
+        .unwrap();
+    let plane = height * width;
+    let mut bytes = Vec::with_capacity(batch * channels * plane);
+    for item in 0..batch {
+        for y in 0..height {
+            for x in 0..width {
+                for channel in 0..channels {
+                    let value = values[item * channels * plane + channel * plane + y * width + x];
+                    bytes.push(((value.clamp(-1.0, 1.0) + 1.0) * 127.5) as u8);
+                }
+            }
+        }
+    }
+    bytes
+}
+
+/// Interleaved RGB u8 back to a `[1, 3, 64, 64]` tensor in [-1, 1].
+fn rgb_u8_to_frame(bytes: &[u8], device: &Device) -> Tensor<4> {
+    let plane = 64 * 64;
+    let mut values = Vec::with_capacity(3 * plane);
+    for channel in 0..3 {
+        for pixel in 0..plane {
+            values.push(bytes[3 * pixel + channel] as f32 / 127.5 - 1.0);
+        }
+    }
+    Tensor::<4>::from_data(TensorData::new(values, [1, 3, 64, 64]), device)
+}
+
+/// Stream dream frames for the interactive player.
+///
+/// Protocol on stdin, one ASCII line per command:
+///   `a N`     apply action N and reply with `F <len>\n` + that many RGB bytes
+///   `s K`     re-sync from the next K records of (1 action byte + 12288 RGB bytes)
+///   `q`       quit
+/// Frames are 64x64 RGB, so a record is 1 + 3*64*64 bytes.
+fn world_play(options: &Options) {
+    use std::io::{BufRead, Read, Write};
+    let device = options.device();
+    let prefix = if options.data.is_empty() {
+        "/home/adeerkhan/tmp/world/data".to_string()
+    } else {
+        options.data.clone()
+    };
+    let checkpoints = if options.checkpoint.is_empty() {
+        "/home/adeerkhan/tmp/world/wm".to_string()
+    } else {
+        options.checkpoint.clone()
+    };
+    let vq_dir = if options.eval_data.is_empty() {
+        "/home/adeerkhan/tmp/world/vq".to_string()
+    } else {
+        options.eval_data.clone()
+    };
+    let wm_config: WorldConfig = serde_json::from_str(
+        &std::fs::read_to_string(format!("{checkpoints}/config.json")).expect("read world config"),
+    )
+    .expect("parse world config");
+    let vq_config: VqConfig = serde_json::from_str(
+        &std::fs::read_to_string(format!("{vq_dir}/config.json")).expect("read vq config"),
+    )
+    .expect("parse vq config");
+    let mut vq = VqVae::new(&vq_config, &device);
+    vq = vq.load_record(ModuleRecord::load(format!("{vq_dir}/model")).expect("load tokenizer"));
+    let mut wm = WorldModel::new(&wm_config, &device);
+    wm = wm.load_record(
+        ModuleRecord::load(format!("{checkpoints}/model"))
+            .expect("load world model")
+            .allow_partial(true),
+    );
+    let context = wm_config.context;
+    let recorded = std::fs::read(format!("{prefix}/actions.bin")).expect("read actions");
+    let mut history: Vec<Tensor<1, Int>> = Vec::new();
+    let mut actions: Vec<i64> = Vec::new();
+    let mut anchor = world_frame_at(&format!("{prefix}/frames.bin"), 0, context - 1, &device);
+    for time in 0..context {
+        let frame = world_frame_at(&format!("{prefix}/frames.bin"), 0, time, &device);
+        history.push(vq.ids(vq.encode(frame)).reshape([TOKENS]));
+        if time > 0 {
+            actions.push(recorded[time - 1] as i64);
+        }
+    }
+
+    let stdin = std::io::stdin();
+    let mut reader = stdin.lock();
+    let mut stdout = std::io::stdout();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+            break;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        match parts.first().copied() {
+            Some("q") | None => break,
+            Some("s") => {
+                let count: usize = parts.get(1).unwrap_or(&"0").parse().unwrap_or(0);
+                let mut record = vec![0u8; 1 + 3 * 64 * 64];
+                history.clear();
+                actions.clear();
+                for index in 0..count {
+                    reader.read_exact(&mut record).expect("read sync frame");
+                    let frame = rgb_u8_to_frame(&record[1..], &device);
+                    if index + 1 == count {
+                        anchor = frame.clone();
+                    }
+                    history.push(vq.ids(vq.encode(frame)).reshape([TOKENS]));
+                    if index > 0 {
+                        actions.push(record[0] as i64);
+                    }
+                }
+            }
+            Some("a") => {
+                let action: i64 = parts.get(1).unwrap_or(&"0").parse().unwrap_or(0);
+                actions.push(action);
+                let seq = Tensor::<3, Int>::from_data(
+                    TensorData::new(
+                        history
+                            .iter()
+                            .flat_map(|ids| {
+                                ids.clone()
+                                    .into_data()
+                                    .convert::<i64>()
+                                    .try_to_vec::<i64>()
+                                    .unwrap()
+                            })
+                            .collect::<Vec<_>>(),
+                        [1, context, TOKENS],
+                    ),
+                    &device,
+                );
+                let acts = Tensor::<2, Int>::from_data(
+                    TensorData::new(actions.clone(), [1, actions.len()]),
+                    &device,
+                );
+                let (new_ids, probs) = wm.predict_multipass(seq, acts, options.passes);
+                let dream = decode_world_prediction(
+                    &vq,
+                    &wm,
+                    ResidualDecode {
+                        copy_ids: history.last().unwrap().clone(),
+                        new_ids: new_ids.clone(),
+                        probs,
+                        anchor: anchor.clone(),
+                        delta_scale: options.delta_scale,
+                        device: &device,
+                    },
+                );
+                anchor = dream.clone();
+                history.push(vq.ids(vq.encode(dream.clone())).reshape([TOKENS]));
+                history.remove(0);
+                actions.remove(0);
+                let bytes = frame_to_rgb_u8(dream);
+                writeln!(stdout, "F {}", bytes.len()).expect("write header");
+                stdout.write_all(&bytes).expect("write frame");
+                stdout.flush().expect("flush frame");
+            }
+            Some(other) => {
+                writeln!(stdout, "E unknown command {other}").expect("write error");
+                stdout.flush().ok();
+            }
+        }
+    }
 }
 
 /// One training window: context frames + masked target frame, with the action

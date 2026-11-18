@@ -177,8 +177,10 @@ that predicts only the *change* brought the 120-step rollout to 21.6 / 36.4 /
 42.6, beating the copy-last-frame baseline. The
 [three-way comparison clip](docs/world-compare.mp4) shows real, dream and the
 trivial baseline side by side; an ablation sweep found that better tokenizer
-reconstruction alone does not improve a long dream. See
-[`diffusion/README.md`](diffusion/README.md).
+reconstruction alone does not improve a long dream. There is also a
+[playable demo](diffusion/README.md#playable-demo) — arrow keys drive both the
+real room and the dream, with space to re-sync — and a
+[10-second playthrough](docs/world-play.mp4).
 
 ## Repository layout
 
