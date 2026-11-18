@@ -743,6 +743,45 @@ visual ceiling. The sharper levers are a longer K=512 tokenizer, a grid of 32
 (2x2 pixel patches), a detail decoder, or factorising the static box layout out
 of the prediction target.
 
+### Ablations: what did not help
+
+A systematic sweep found that the 2,000-step residual model with the 8k-step
+K=256 tokenizer is a local optimum. Each change below was trained and scored on
+the same 120-step rollout; none beat it overall.
+
+| Change | Reconstruction ceiling | 120-step: 1-10 / 11-30 / 31+ | Verdict |
+| --- | ---: | --- | --- |
+| Current best (K=256, 8k tok., 2k dynamics) | 5.67 | 21.64 / 36.33 / **42.21** | best |
+| Tokenizer K=512, D=64, 24k steps | **3.07** | 21.44 / 35.74 / 44.48 | sharper frames, worse drift |
+| Tokenizer K=256, 24k steps | 3.61 | 21.85 / 35.50 / 46.40 | better mid, much worse late |
+| Context corruption 0.3 / 0.5 | 5.67 | 24.32 / 36.85 / 46.28 | worse |
+| Token feedback instead of re-encoding | 5.67 | 22.16 / 36.62 / 46.46 | worse |
+| Dynamics trained 6,000 steps | 5.67 | 24.42 / 36.59 / 44.63 | worse |
+
+The important lesson: **better reconstruction does not produce a better
+dream.** The K=512 tokenizer cut reconstruction error almost in half (5.67 ->
+3.07) but the finer codes are harder for the dynamics model to predict, so the
+rollout drifts faster and the frames develop blocky artifacts. Re-encoding each
+predicted frame back into tokens also looks wasteful but acts as useful
+regularisation — feeding the model's own ids straight back made the dream
+worse. More corruption and longer dynamics training both overfit the one-step
+objective at the expense of long-rollout coherence.
+
+The honest conclusion is that the dynamics model, not the tokenizer or the
+decoder, now limits long dreams. The next real step is to change *how* it is
+trained for rollout (unrolled self-imitation or a pixel-difference residual
+head), not to keep tuning the tokenizer.
+
+### Three-way comparison video
+
+[`docs/world-compare.mp4`](../docs/world-compare.mp4) (and its GIF) shows the
+real room, the dream, and the copy-last-real-frame baseline side by side with
+the recorded action and each panel's MAE printed underneath. At step 90 the
+dream scores 43.6 against the copy baseline's 68.6 — the clearest demonstration
+that the model adds value over a trivial predictor late in a rollout. This is a
+better way to judge the work than a two-panel clip because the trivial baseline
+is always visible as a control.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer

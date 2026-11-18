@@ -174,7 +174,10 @@ moves the objects correctly but is limited by tokenizer blur — see the
 [10-second clip](docs/world-dream.mp4). Training on the model's own mistakes cut
 the first-10-step error from 36.7 to 25.1, and a pixel-anchored residual head
 that predicts only the *change* brought the 120-step rollout to 21.6 / 36.4 /
-42.6, beating the copy-last-frame baseline. See
+42.6, beating the copy-last-frame baseline. The
+[three-way comparison clip](docs/world-compare.mp4) shows real, dream and the
+trivial baseline side by side; an ablation sweep found that better tokenizer
+reconstruction alone does not improve a long dream. See
 [`diffusion/README.md`](diffusion/README.md).
 
 ## Repository layout

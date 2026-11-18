@@ -160,6 +160,7 @@ struct Options {
     change_threshold: f32,
     delta_scale: f32,
     passes: usize,
+    token_feedback: bool,
 }
 
 impl Default for Options {
@@ -205,6 +206,7 @@ impl Default for Options {
             change_threshold: 0.0,
             delta_scale: 0.5,
             passes: 4,
+            token_feedback: false,
         }
     }
 }
@@ -269,6 +271,7 @@ impl Options {
                 }
                 "--delta-scale" => options.delta_scale = value().parse().expect("delta scale"),
                 "--passes" => options.passes = value().parse().expect("pass count"),
+                "--token-feedback" => options.token_feedback = true,
                 "--world-noise" => options.world_noise = value().parse().expect("world noise"),
                 "--clean-p" => options.clean_p = value().parse().expect("clean probability"),
                 "--attention" => {
@@ -1059,7 +1062,7 @@ fn dream_rollout(options: &Options) {
             &wm,
             ResidualDecode {
                 copy_ids: history.last().unwrap().clone(),
-                new_ids,
+                new_ids: new_ids.clone(),
                 probs,
                 anchor: last_pixels.clone(),
                 delta_scale: options.delta_scale,
@@ -1084,7 +1087,14 @@ fn dream_rollout(options: &Options) {
             let strip = Tensor::cat(vec![real_frame, dream.clone()], 3);
             save_samples(strip, &format!("{}/step-{step:04}.png", options.out));
         }
-        let next = vq.ids(vq.encode(dream.clone())).reshape([TOKENS]);
+        // Feeding the model's own token ids back avoids a lossy decode ->
+        // re-encode round trip each step, which adds quantisation error to
+        // the context on every frame of a long rollout.
+        let next = if options.token_feedback {
+            new_ids.reshape([TOKENS])
+        } else {
+            vq.ids(vq.encode(dream.clone())).reshape([TOKENS])
+        };
         history.remove(0);
         history.push(next);
         actions.remove(0);
