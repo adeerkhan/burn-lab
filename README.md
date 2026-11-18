@@ -192,7 +192,9 @@ tokenizer cuts reconstruction error from 5.41 to 2.65, and two generation bugs
 [state-first model](diffusion/README.md#state-first-model-exact-pixels-learned-avatar),
 learns the avatar transition and renders with the known environment: exact
 pixels, 97.7% one-step avatar accuracy, and a
-[60-second comparison](docs/dungeon-state.mp4).
+[60-second comparison](docs/dungeon-state.mp4). The same model then drives a
+[model-predictive agent](docs/dungeon-agent.mp4) that collects all five
+diamonds with zero policy training.
 
 ## Repository layout
 

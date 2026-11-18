@@ -951,6 +951,30 @@ path over hundreds of steps even though every single step is ~95% accurate.
 The next step is to learn the enemy and diamond transitions the same way, which
 would make the whole state generated while keeping the exact renderer.
 
+### Planning with the learned model
+
+The state model is fast enough to plan with. `scripts/state_agent.py` runs a
+small model-predictive controller: at every step it samples 48 action
+sequences of length 6, rolls each through the learned avatar model, scores the
+final cell (near a diamond or the exit, away from enemies, bonus for a
+diamond), and executes the first action of the best sequence in the real
+environment. **No policy is trained** — all control comes from the learned
+transition plus a hand-written reward.
+
+[`docs/dungeon-agent.mp4`](../docs/dungeon-agent.mp4) is a 60-second,
+720-step run: it collects **5 of 5 diamonds** by step ~300, is caught once, and
+needs about 33 seconds of CPU to plan and render the whole episode. This is the
+concrete answer to "is this an alternative to RL": the model is used as a
+simulator for planning, with zero environment samples spent on policy
+optimisation.
+
+![Model-predictive dungeon agent](../docs/dungeon-agent.gif)
+
+The planner is deliberately simple (random shooting, six-step horizon, static
+enemy assumption). The obvious upgrades are a learned enemy transition inside
+the rollout, a longer horizon with a value function, and a proper terminal
+reward for the exit.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer
