@@ -247,6 +247,19 @@ def navigate(dungeon: Dungeon, rng: np.random.Generator):
             yield int(rng.integers(5))
 
 
+def state_vector(dungeon: Dungeon) -> list[int]:
+    """Fixed 28-byte record: player, 4 enemies, 8 diamonds, goal."""
+    values = [dungeon.player[0], dungeon.player[1]]
+    for index in range(4):
+        enemy = dungeon.enemies[index] if index < len(dungeon.enemies) else None
+        values += [enemy[0], enemy[1]] if enemy else [255, 255]
+    for index in range(8):
+        gem = dungeon.diamonds[index] if index < len(dungeon.diamonds) else None
+        values += [gem[0], gem[1]] if gem else [255, 255]
+    values += [dungeon.goal[0], dungeon.goal[1]]
+    return values
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--episodes", type=int, default=300)
@@ -260,21 +273,28 @@ def main() -> None:
 
     frames = np.empty((args.episodes, args.steps + 1, GRID, GRID, 3), dtype=np.uint8)
     actions = np.empty((args.episodes, args.steps), dtype=np.uint8)
+    states = np.empty((args.episodes, args.steps + 1, 28), dtype=np.uint8)
+    walls = np.empty((args.episodes, GRID, GRID), dtype=np.uint8)
     for episode in range(args.episodes):
         seed = args.seed * 100003 + episode
         dungeon = Dungeon(seed, args.enemies, args.diamonds)
         policy = navigate(dungeon, np.random.default_rng(seed + 1))
         frames[episode, 0] = dungeon.render()
+        states[episode, 0] = state_vector(dungeon)
+        walls[episode] = dungeon.grid
         for t in range(args.steps):
             action = next(policy)
             actions[episode, t] = action
             frames[episode, t + 1] = dungeon.step(action)
+            states[episode, t + 1] = state_vector(dungeon)
         if episode % 50 == 0:
             print(f"episode {episode}", flush=True)
 
     flat = np.ascontiguousarray(frames).reshape(-1)
     (args.out / "frames.bin").write_bytes(flat.tobytes())
     (args.out / "actions.bin").write_bytes(np.ascontiguousarray(actions).tobytes())
+    (args.out / "state.bin").write_bytes(np.ascontiguousarray(states).tobytes())
+    (args.out / "walls.bin").write_bytes(np.ascontiguousarray(walls).tobytes())
     (args.out / "meta.json").write_text(json.dumps({
         "episodes": args.episodes, "steps": args.steps, "size": GRID, "actions": DIR_NAMES,
     }))

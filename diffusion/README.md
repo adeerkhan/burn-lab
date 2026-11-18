@@ -919,6 +919,38 @@ step is an architectural change, not another knob:
   model to predict outcomes for planning; quality is then the environment's,
   not the model's.
 
+### State-first model: exact pixels, learned avatar
+
+The pixel model's quality ceiling came from asking a small token model to
+reconstruct the whole frame. The state-first alternative separates the two
+jobs: **learn the avatar transition, render with the known environment**.
+
+- `scripts/dungeon_env.py` now also records `state.bin` (player, up to four
+  enemies, up to eight diamonds and the exit as coordinates) and `walls.bin`
+  (the static cave).
+- `scripts/state_model.py` trains a 13-feature MLP — current cell, one-hot
+  action, the current cell's wall, the target cell's wall and the four
+  neighbours — to predict the avatar's next cell. It reaches **97.7% exact
+  next-cell accuracy** on held-out episodes (93.3% on the demo episode).
+- `scripts/state_play.py` rolls the learned avatar forward, enforces the known
+  constraint that a cell must be adjacent and free, and draws the frame with
+  the real renderer. The cave, enemies, diamonds and exit come from the
+  observed state; only the avatar is generated.
+
+[`docs/dungeon-state.mp4`](../docs/dungeon-state.mp4) is a 60-second,
+720-step comparison at 12 fps. Pixels are exact because the renderer is the
+environment, not a learned decoder, and the avatar visibly moves in the
+pressed direction.
+
+![State-first dungeon dream](../docs/dungeon-state.gif)
+
+The honest scope: this is a **hybrid** state-first model, not a full world
+model. The avatar transition is learned; the enemies, diamonds and exit are
+observed rather than predicted, and the closed-loop avatar drifts from the real
+path over hundreds of steps even though every single step is ~95% accurate.
+The next step is to learn the enemy and diamond transitions the same way, which
+would make the whole state generated while keeping the exact renderer.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer

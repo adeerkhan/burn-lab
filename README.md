@@ -188,9 +188,11 @@ chasing red enemies and a green exit, recorded as flat u8 frames. A 32x32-code
 tokenizer cuts reconstruction error from 5.41 to 2.65, and two generation bugs
 (tiny-pocket starts and predictable actions) were fixed along the way — see the
 [dungeon section](diffusion/README.md#cellular-automata-dungeons) and the
-[60-second rollout](docs/dungeon-grid32-long.mp4). The honest caveat is that the
-avatar is controllable but still drifts, so this is a video predictor rather
-than a faithful simulator.
+[60-second rollout](docs/dungeon-grid32-long.mp4). The next step, a
+[state-first model](diffusion/README.md#state-first-model-exact-pixels-learned-avatar),
+learns the avatar transition and renders with the known environment: exact
+pixels, 97.7% one-step avatar accuracy, and a
+[60-second comparison](docs/dungeon-state.mp4).
 
 ## Repository layout
 
