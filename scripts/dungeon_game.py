@@ -130,23 +130,30 @@ class Game:
         from PIL import Image, ImageDraw
         canvas = Image.fromarray(image)
         draw = ImageDraw.Draw(canvas)
+        from dungeon_env import VIEW
+        cx = int(np.clip(self.player[0] - VIEW // 2, 0, GRID - VIEW))
+        cy = int(np.clip(self.player[1] - VIEW // 2, 0, GRID - VIEW))
+
+        def screen(cell):
+            return ((cell[0] - cx) * 2 + 1.0, (cell[1] - cy) * 2 + 1.0)
+
         for x, y, colour, life in self.particles:
+            sx, sy = screen((x, y))
             r = max(1, life // 6)
-            draw.ellipse([x - r, y - r, x + r, y + r], fill=colour)
+            draw.ellipse([sx - r, sy - r, sx + r, sy + r], fill=colour)
         for gem in self.diamonds:
-            draw.polygon([(gem[0], gem[1] - 3), (gem[0] + 3, gem[1]),
-                          (gem[0], gem[1] + 3), (gem[0] - 3, gem[1])],
+            sx, sy = screen(gem)
+            draw.polygon([(sx, sy - 2), (sx + 2, sy), (sx, sy + 2), (sx - 2, sy)],
                          fill=(70, 220, 255), outline=(235, 255, 255))
         for enemy in self.enemies:
-            draw.ellipse([enemy[0] - 3, enemy[1] - 3, enemy[0] + 3, enemy[1] + 3],
-                         fill=(250, 70, 82), outline=(80, 8, 16))
-            draw.ellipse([enemy[0] - 1, enemy[1] - 1, enemy[0] + 1, enemy[1] + 1],
-                         fill=(255, 220, 220))
+            sx, sy = screen(enemy)
+            draw.ellipse([sx - 2, sy - 2, sx + 2, sy + 2], fill=(250, 70, 82), outline=(80, 8, 16))
+            draw.ellipse([sx - 1, sy - 1, sx + 1, sy + 1], fill=(255, 220, 220))
+        sx, sy = screen(self.exit)
         colour = (60, 250, 140) if self.unlocked else (70, 120, 90)
-        draw.rectangle([self.exit[0] - 3, self.exit[1] - 3, self.exit[0] + 3, self.exit[1] + 3],
-                       outline=colour, width=2)
-        draw.ellipse([self.player[0] - 4, self.player[1] - 4, self.player[0] + 4, self.player[1] + 4],
-                     fill=(255, 214, 92), outline=(255, 250, 220))
+        draw.rectangle([sx - 2, sy - 2, sx + 2, sy + 2], outline=colour, width=1)
+        px, py = screen(self.player)
+        draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=(255, 214, 92), outline=(255, 250, 220))
         return np.asarray(canvas)
 
     def hud(self, frame: np.ndarray) -> "Image.Image":
@@ -227,7 +234,7 @@ class Planner:
             value = -dist.get(candidate, 4096)
             for enemy in game.enemies:
                 gap = abs(candidate[0] - enemy[0]) + abs(candidate[1] - enemy[1])
-                value -= 30.0 * math.exp(-gap / 5.0)
+                value -= 9.0 * math.exp(-gap / 4.0)
             if candidate in game.diamonds:
                 value += 12.0
             if action == 0:

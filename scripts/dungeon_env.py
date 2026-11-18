@@ -24,10 +24,10 @@ import numpy as np
 DIR_NAMES = ["stay", "up", "down", "left", "right"]
 DELTA = [(0, 0), (0, -1), (0, 1), (-1, 0), (1, 0)]
 GRID = 64
-VIEW = 64
-SCALE = 1
-FLOOR = np.array([40, 46, 62], dtype=np.float32)
-WALL = np.array([158, 144, 124], dtype=np.float32)
+VIEW = 32
+SCALE = 2
+FLOOR = np.array([30, 36, 48], dtype=np.float32)
+WALL = np.array([176, 160, 136], dtype=np.float32)
 WARM = np.array([1.0, 0.72, 0.38], dtype=np.float32)
 
 
@@ -44,6 +44,43 @@ def generate(grid_rng: np.random.Generator) -> np.ndarray:
         grid = (neighbours >= 5).astype(np.uint8)
     grid[0, :] = grid[-1, :] = grid[:, 0] = grid[:, -1] = 1
     return grid
+
+
+def generate_rooms(rng: np.random.Generator):
+    """BSP rooms and L-shaped corridors: readable walls and real navigation."""
+    grid = np.ones((GRID, GRID), dtype=np.uint8)
+    rooms: list[tuple[int, int, int, int]] = []
+
+    def split(x: int, y: int, width: int, height: int, depth: int) -> None:
+        if depth == 0 or width < 14 or height < 14:
+            room_w = int(rng.integers(5, max(6, min(width - 2, 12))))
+            room_h = int(rng.integers(5, max(6, min(height - 2, 12))))
+            room_x = int(rng.integers(x + 1, x + width - room_w))
+            room_y = int(rng.integers(y + 1, y + height - room_h))
+            grid[room_y:room_y + room_h, room_x:room_x + room_w] = 0
+            rooms.append((room_x, room_y, room_w, room_h))
+            return
+        if width >= height:
+            cut = int(rng.integers(width // 3, 2 * width // 3))
+            split(x, y, cut, height, depth - 1)
+            split(x + cut, y, width - cut, height, depth - 1)
+        else:
+            cut = int(rng.integers(height // 3, 2 * height // 3))
+            split(x, y, width, cut, depth - 1)
+            split(x, y + cut, width, height - cut, depth - 1)
+
+    split(1, 1, GRID - 2, GRID - 2, 4)
+    for (ax, ay, aw, ah), (bx, by, bw, bh) in zip(rooms, rooms[1:]):
+        axc, ayc = ax + aw // 2, ay + ah // 2
+        bxc, byc = bx + bw // 2, by + bh // 2
+        if rng.random() < 0.5:
+            grid[ayc, min(axc, bxc):max(axc, bxc) + 1] = 0
+            grid[min(ayc, byc):max(ayc, byc) + 1, bxc] = 0
+        else:
+            grid[min(ayc, byc):max(ayc, byc) + 1, axc] = 0
+            grid[byc, min(axc, bxc):max(axc, bxc) + 1] = 0
+    grid[0, :] = grid[-1, :] = grid[:, 0] = grid[:, -1] = 1
+    return grid, rooms
 
 
 def component(grid: np.ndarray, start: tuple[int, int]) -> set[tuple[int, int]]:
@@ -90,14 +127,16 @@ def bfs_step(grid: np.ndarray, start, goal) -> int:
 
 
 class Dungeon:
-    def __init__(self, seed: int, n_enemies: int = 3, n_diamonds: int = 5):
+    def __init__(self, seed: int, n_enemies: int = 3, n_diamonds: int = 5,
+                 generator: str = "rooms"):
         rng = np.random.default_rng(seed)
         self.rng = rng
-        # Retry until the largest cave is big enough to navigate; a random
-        # floor cell can otherwise land in a tiny pocket and freeze the player,
-        # which also poisons the recorded actions.
+        self.rooms = None
         for _ in range(12):
-            self.grid = generate(rng)
+            if generator == "ca":
+                self.grid = generate(rng)
+            else:
+                self.grid, self.rooms = generate_rooms(rng)
             region = largest_component(self.grid)
             if len(region) >= 700:
                 break
@@ -109,18 +148,23 @@ class Dungeon:
             x, y = cell
             return 0 <= x < GRID and 0 <= y < GRID and self.grid[y, x] == 0
 
-        open_cells = [c for c in region
-                      if sum(free((c[0] + dx, c[1] + dy)) for dx, dy in DELTA[1:]) >= 3]
-        start = open_cells[int(rng.integers(len(open_cells)))] if open_cells else next(iter(region))
+        if self.rooms:
+            centers = [(x + w // 2, y + h // 2) for x, y, w, h in self.rooms
+                       if (x + w // 2, y + h // 2) in self.region]
+        else:
+            centers = [c for c in self.region
+                       if sum(free((c[0] + dx, c[1] + dy)) for dx, dy in DELTA[1:]) >= 3]
+        if not centers:
+            centers = list(self.region)
+        start = centers[int(rng.integers(len(centers)))]
         self.start = start
-        far = [c for c in region if abs(c[0] - start[0]) + abs(c[1] - start[1]) > GRID // 2]
+        far = [c for c in self.region if abs(c[0] - start[0]) + abs(c[1] - start[1]) > GRID // 2]
         if not far:
-            far = [c for c in region if c != start]
+            far = [c for c in self.region if c != start]
         self.goal = far[int(rng.integers(len(far)))]
         self.player = start
 
-        # Spread enemies and diamonds across the cave, away from the start.
-        spots = [c for c in region if abs(c[0] - start[0]) + abs(c[1] - start[1]) > 6]
+        spots = [c for c in self.region if abs(c[0] - start[0]) + abs(c[1] - start[1]) > 6]
         rng.shuffle(spots)
         self.enemies = spots[: min(n_enemies, len(spots))]
         self.diamonds = spots[len(self.enemies): len(self.enemies) + n_diamonds]
@@ -173,8 +217,8 @@ class Dungeon:
 
     def _blit(self, image: np.ndarray, sx: float, sy: float, colour, core=None) -> None:
         cx, cy = int(round(sx)), int(round(sy))
-        x0, x1 = max(0, cx - 2), min(image.shape[1], cx + 3)
-        y0, y1 = max(0, cy - 2), min(image.shape[0], cy + 3)
+        x0, x1 = max(0, cx - 1), min(image.shape[1], cx + 2)
+        y0, y1 = max(0, cy - 1), min(image.shape[0], cy + 2)
         if x0 < x1 and y0 < y1:
             image[y0:y1, x0:x1] = colour
             if core is not None and 0 <= cy < image.shape[0] and 0 <= cx < image.shape[1]:
@@ -195,8 +239,8 @@ class Dungeon:
         sx = (self.player[0] - cx) * SCALE + 1.0
         sy = (self.player[1] - cy) * SCALE + 1.0
         distance = np.hypot(self.px - sx, self.py - sy)
-        torch = 0.24 + 0.76 * np.exp(-np.square(distance / 22.0))
-        image = image * torch[..., None] + (WARM * 54.0) * (torch * torch)[..., None]
+        torch = 0.15 + 0.85 * np.exp(-np.square(distance / 18.0))
+        image = image * torch[..., None] + (WARM * 48.0) * (torch * torch)[..., None]
 
         def glow(x: float, y: float, radius: float, colour) -> None:
             if -8 < x < VIEW * SCALE + 8 and -8 < y < VIEW * SCALE + 8:
@@ -206,13 +250,13 @@ class Dungeon:
         for diamond in self.diamonds:
             ex = (diamond[0] - cx) * SCALE + 1.0
             ey = (diamond[1] - cy) * SCALE + 1.0
-            glow(ex, ey, 5.0, np.array([40, 150, 190], dtype=np.float32) * 0.5)
+            glow(ex, ey, 3.6, np.array([40, 150, 190], dtype=np.float32) * 0.5)
             self._blit(image, ex, ey, np.array([70, 220, 255], dtype=np.float32),
                        np.array([235, 255, 255], dtype=np.float32))
         for enemy in self.enemies:
             ex = (enemy[0] - cx) * SCALE + 1.0
             ey = (enemy[1] - cy) * SCALE + 1.0
-            glow(ex, ey, 4.5, np.array([190, 30, 40], dtype=np.float32) * 0.45)
+            glow(ex, ey, 3.2, np.array([190, 30, 40], dtype=np.float32) * 0.45)
             self._blit(image, ex, ey, np.array([250, 70, 82], dtype=np.float32),
                        np.array([120, 12, 20], dtype=np.float32))
         self._blit(image, (self.goal[0] - cx) * SCALE + 1.0, (self.goal[1] - cy) * SCALE + 1.0,

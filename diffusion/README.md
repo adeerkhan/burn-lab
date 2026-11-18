@@ -996,10 +996,10 @@ same model-predictive loop: score the learned next cell by BFS distance to the
 nearest diamond or the exit, subtract a proximity penalty for enemies, and
 execute the best action. No policy is trained.
 
-[`docs/dungeon-game.mp4`](../docs/dungeon-game.mp4) is a 60-second, 720-step
-session **with sound**: the agent clears all five diamonds, unlocks the exit,
-reaches level 2 and finishes with score 140. The same run is in
-[`docs/dungeon-game.gif`](../docs/dungeon-game.gif) (silent).
+[`docs/dungeon-game2.mp4`](../docs/dungeon-game2.mp4) is a 60-second, 720-step
+session **with sound**: the agent clears levels 1-3, collects diamonds, unlocks
+exits and finishes with score 230. The same run is in
+[`docs/dungeon-game2.gif`](../docs/dungeon-game2.gif) (silent).
 
 To play it yourself (needs `pygame-ce` for the window and mixer):
 
