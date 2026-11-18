@@ -185,8 +185,8 @@ real room and the dream, with space to re-sync — and a
 A **cellular-automata dungeon** uses the identical pixel format and model: a
 32x32 cave carved by the 4-5 rule, a torch-lit navigator and a goal cell,
 recorded as flat u8 frames. It trains and dreams on the same CLI — see the
-[dungeon section](diffusion/README.md#cellular-automata-dungeons) and the
-[real-vs-dream clip](docs/dungeon-dream.mp4).
+[dungeon section](diffusion/README.md#cellular-automata-dungeons). A newer cave
+adds chasing enemies and a [30-second rollout](docs/dungeon-enemies-long.mp4).
 
 ## Repository layout
 

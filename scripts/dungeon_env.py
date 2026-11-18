@@ -74,34 +74,63 @@ def bfs_step(grid: np.ndarray, start, goal) -> int:
 
 
 class Dungeon:
-    def __init__(self, seed: int):
+    def __init__(self, seed: int, n_enemies: int = 2):
         rng = np.random.default_rng(seed)
+        self.rng = rng
         self.grid = generate(rng)
         floor = [(x, y) for y in range(GRID) for x in range(GRID) if self.grid[y, x] == 0]
         if len(floor) < 40:
             raise RuntimeError("degenerate dungeon")
         start = floor[int(rng.integers(len(floor)))]
+        self.start = start
         reachable = component(self.grid, start)
         candidates = [c for c in reachable if abs(c[0] - start[0]) + abs(c[1] - start[1]) > GRID // 2]
         self.goal = candidates[int(rng.integers(len(candidates)))] if candidates else start
         self.player = start
+        far = [c for c in reachable if abs(c[0] - start[0]) + abs(c[1] - start[1]) > 9]
+        self.enemies = [far[int(rng.integers(len(far)))] for _ in range(min(n_enemies, len(far)))] if far else []
         self.hits = 0
+        self.caught = 0
         yy, xx = np.mgrid[0:64, 0:64]
         self.xs = xx / SCALE
         self.ys = yy / SCALE
+
+    def _free(self, cell) -> bool:
+        x, y = cell
+        return 0 <= x < GRID and 0 <= y < GRID and self.grid[y, x] == 0
 
     def step(self, action: int) -> np.ndarray:
         action = int(action)
         dx, dy = DELTA[action]
         nx, ny = self.player[0] + dx, self.player[1] + dy
-        if 0 <= nx < GRID and 0 <= ny < GRID and self.grid[ny, nx] == 0:
+        if self._free((nx, ny)):
             self.player = (nx, ny)
         else:
             self.hits += 1
         if self.player == self.goal:
-            self.goal = (self.goal[0] + 7) % (GRID - 2) + 1, (self.goal[1] + 5) % (GRID - 2) + 1
-            if self.grid[self.goal[1], self.goal[0]] == 1:
-                self.goal = self.player
+            options = [c for c in component(self.grid, self.player)
+                       if abs(c[0] - self.player[0]) + abs(c[1] - self.player[1]) > GRID // 2]
+            self.goal = options[int(self.rng.integers(len(options)))] if options else self.player
+
+        # Enemies chase when the player is close, otherwise wander slowly.
+        for index, enemy in enumerate(self.enemies):
+            distance = abs(enemy[0] - self.player[0]) + abs(enemy[1] - self.player[1])
+            if distance <= 9:
+                dx = np.sign(self.player[0] - enemy[0])
+                dy = np.sign(self.player[1] - enemy[1])
+                choices = [(enemy[0] + int(dx), enemy[1]), (enemy[0], enemy[1] + int(dy))]
+                choices = [c for c in choices if self._free(c)]
+                if choices:
+                    enemy = choices[int(self.rng.integers(len(choices)))]
+            elif self.rng.random() < 0.6:
+                moves = [(enemy[0] + ddx, enemy[1] + ddy) for ddx, ddy in DELTA[1:]]
+                moves = [c for c in moves if self._free(c)]
+                if moves:
+                    enemy = moves[int(self.rng.integers(len(moves)))]
+            self.enemies[index] = enemy
+            if enemy == self.player:
+                self.player = self.start
+                self.caught += 1
         return self.render()
 
     def render(self) -> np.ndarray:
@@ -119,14 +148,33 @@ class Dungeon:
 
         goal_mask = (np.abs(self.xs - self.goal[0]) < 1.0) & (np.abs(self.ys - self.goal[1]) < 1.0)
         image[goal_mask] = np.array([70, 255, 130], dtype=np.float32) * (0.4 + 0.6 * torch[goal_mask, None])
+        for enemy in self.enemies:
+            enemy_mask = (np.abs(self.xs - enemy[0]) < 1.0) & (np.abs(self.ys - enemy[1]) < 1.0)
+            brightness = 0.55 + 0.45 * torch[enemy_mask].mean() if enemy_mask.any() else 0.4
+            image[enemy_mask] = np.array([255, 82, 82], dtype=np.float32) * brightness
         player_mask = (np.abs(self.xs - self.player[0]) < 1.0) & (np.abs(self.ys - self.player[1]) < 1.0)
         image[player_mask] = np.array([255, 214, 92], dtype=np.float32)
         return np.clip(image, 0, 255).astype(np.uint8)
 
 
 def navigate(dungeon: Dungeon, rng: np.random.Generator):
-    """Mostly follow the shortest path, with some random exploration."""
+    """Follow the goal, but dodge enemies that get close."""
     while True:
+        if dungeon.enemies:
+            nearest = min(dungeon.enemies,
+                          key=lambda e: abs(e[0] - dungeon.player[0]) + abs(e[1] - dungeon.player[1]))
+            gap = abs(nearest[0] - dungeon.player[0]) + abs(nearest[1] - dungeon.player[1])
+            if gap <= 4 and rng.random() < 0.75:
+                dx = np.sign(dungeon.player[0] - nearest[0])
+                dy = np.sign(dungeon.player[1] - nearest[1])
+                for action, (ddx, ddy) in enumerate(DELTA[1:], start=1):
+                    if (ddx, ddy) == (int(dx), int(dy)) or (ddx, ddy) == (0, int(dy)):
+                        if dungeon._free((dungeon.player[0] + ddx, dungeon.player[1] + ddy)):
+                            yield action
+                            break
+                else:
+                    yield int(rng.integers(5))
+                continue
         if rng.random() < 0.82:
             yield bfs_step(dungeon.grid, dungeon.player, dungeon.goal)
         else:
@@ -139,6 +187,7 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=128)
     ap.add_argument("--out", type=Path, default=Path("/home/adeerkhan/tmp/dungeon/data"))
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--enemies", type=int, default=2)
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -146,7 +195,7 @@ def main() -> None:
     actions = np.empty((args.episodes, args.steps), dtype=np.uint8)
     for episode in range(args.episodes):
         seed = args.seed * 100003 + episode
-        dungeon = Dungeon(seed)
+        dungeon = Dungeon(seed, args.enemies)
         policy = navigate(dungeon, np.random.default_rng(seed + 1))
         frames[episode, 0] = dungeon.render()
         for t in range(args.steps):

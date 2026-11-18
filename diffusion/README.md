@@ -863,6 +863,33 @@ Navigation is interactive too: `scripts/world_play.py --env dungeon --data
 /tmp/dungeon/data --ckpt /tmp/dungeon/wm --eval-data /tmp/dungeon/vq` drives the
 real dungeon and the dream with the same arrow keys, with space to re-sync.
 
+### Enemies and a 30-second rollout
+
+The dungeon now has **enemies**: 1-3 red creatures per cave that wander when
+the player is far and chase by a greedy step when it is within nine cells.
+Touching one sends the player back to the start. The recorded navigator dodges
+them when they get within four cells, so the actions carry real avoidance
+behaviour for the model to learn. Everything else — 64x64 RGB, five actions,
+flat files, the same tokenizer and dynamics model — is unchanged.
+
+| Enemy dungeon metric | Value |
+| --- | ---: |
+| One-step: copy / VQ-VAE ceiling / model | 1.74 / 1.89 / 1.75 |
+| 120-step dream (`--delta-scale 0.1`) | 6.31 / 4.06 / 5.45 |
+
+A moving enemy makes the copy baseline much weaker here (1.74 versus 1.03 in
+the enemy-free cave), so the one-step scores are nearly tied. The model's
+advantage appears over the rollout, where it keeps the cave, torch, goal and
+enemies coherent.
+
+[`docs/dungeon-enemies-long.mp4`](../docs/dungeon-enemies-long.mp4) is a **30-second,
+360-step** rollout at 12 fps with a labelled action strip. It was generated
+through the interactive player rather than `world-dream`: the Rust frame loader
+uses a fixed 129-step episode stride, so an offline 360-step dream would start
+reading a different episode. The player only needs real frames for the initial
+sync, so it can roll out as long as the environment can generate actions —
+that is also how a game avoids the offline dataset's length limit.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer
