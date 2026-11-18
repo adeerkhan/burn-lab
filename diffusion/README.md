@@ -893,6 +893,32 @@ model can replace RL. The concrete next step is an explicit position head
 trained on recorded player coordinates, which would decouple avatar motion
 from the pixel-level change gate.
 
+#### The quality ceiling
+
+`--gate-boost` amplifies confident changes instead of scaling every delta, so
+the avatar moves in the pressed direction without dragging the whole cave. It
+works mechanically (action 1 moves up, action 3 stays put), but at a strength
+large enough to see the motion the dream grows red enemy smears and colour
+artifacts. There is no setting that gives both faithful pixels and visible
+movement with this model.
+
+That is the honest ceiling of the current design: a 1M-parameter autoregressive
+token model trained for minutes on 300 episodes. It is a good teaching artifact
+and a convincing video predictor, but it is not a game engine. The next quality
+step is an architectural change, not another knob:
+
+- **State-first model.** Record the true player, enemy, diamond and exit
+  coordinates; learn the state transition from (state, action); render with the
+  known environment. Pixels become exact and movement becomes guaranteed,
+  because the renderer is not learned. This is the smallest change that fixes
+  both complaints at once.
+- **Pixel-first at higher scale.** A 128x128 diffusion or consistency model with
+  far more data and compute could produce sharp frames, but that is a different
+  class of training run.
+- **Model as planner, not renderer.** Keep the real renderer and use the learned
+  model to predict outcomes for planning; quality is then the environment's,
+  not the model's.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer

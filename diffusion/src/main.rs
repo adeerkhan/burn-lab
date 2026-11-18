@@ -165,6 +165,7 @@ struct Options {
     detail: String,
     grid: usize,
     change_prior: f32,
+    gate_boost: f32,
 }
 
 impl Default for Options {
@@ -214,6 +215,7 @@ impl Default for Options {
             detail: String::new(),
             grid: 16,
             change_prior: -2.0,
+            gate_boost: 1.0,
         }
     }
 }
@@ -282,6 +284,7 @@ impl Options {
                 "--detail" => options.detail = value(),
                 "--grid" => options.grid = value().parse().expect("grid size"),
                 "--change-prior" => options.change_prior = value().parse().expect("change prior"),
+                "--gate-boost" => options.gate_boost = value().parse().expect("gate boost"),
                 "--world-noise" => options.world_noise = value().parse().expect("world noise"),
                 "--clean-p" => options.clean_p = value().parse().expect("clean probability"),
                 "--attention" => {
@@ -947,6 +950,7 @@ fn world_ceiling(options: &Options) {
                 probs,
                 anchor: previous.clone(),
                 delta_scale: options.delta_scale,
+                gate_boost: options.gate_boost,
                 device: &device,
             },
         );
@@ -981,6 +985,7 @@ struct ResidualDecode<'a> {
     probs: Tensor<2>,
     anchor: Tensor<4>,
     delta_scale: f32,
+    gate_boost: f32,
     device: &'a Device,
 }
 
@@ -1010,6 +1015,10 @@ fn decode_world_prediction(vq: &VqVae, wm: &WorldModel, args: ResidualDecode<'_>
         TensorData::new(weights, [1, channels, height, width]),
         args.device,
     );
+    // Amplify confident changes instead of scaling every delta: a small
+    // change probability should stay closed (the cave must not drift), while
+    // an entity token with real evidence should open fully.
+    let mask = mask.mul_scalar(args.gate_boost).clamp(0.0, 1.0);
     args.anchor
         .add(delta.mul(mask).mul_scalar(args.delta_scale))
         .clamp(-1.0, 1.0)
@@ -1106,6 +1115,7 @@ fn dream_rollout(options: &Options) {
                 probs,
                 anchor: last_pixels.clone(),
                 delta_scale: options.delta_scale,
+                gate_boost: options.gate_boost,
                 device: &device,
             },
         );
@@ -1303,6 +1313,7 @@ fn play_predict(args: PlayPredict<'_>, action: i64) -> Tensor<4> {
             probs,
             anchor: args.anchor.clone(),
             delta_scale: args.options.delta_scale,
+            gate_boost: args.options.gate_boost,
             device: args.device,
         },
     )

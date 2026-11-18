@@ -34,7 +34,7 @@ FRAME_BYTES = 3 * 64 * 64
 class DreamClient:
     """Line-based command protocol to the Rust inference server."""
 
-    def __init__(self, binary: str, ckpt: str, eval_data: str, data: str, passes: int | None, delta_scale: float | None = None):
+    def __init__(self, binary: str, ckpt: str, eval_data: str, data: str, passes: int | None, delta_scale: float | None = None, gate_boost: float | None = None):
         cmd = [
             binary, "world-play", "--backend", "wgpu",
             "--ckpt", ckpt, "--eval-data", eval_data,
@@ -45,6 +45,8 @@ class DreamClient:
             cmd += ["--passes", str(passes)]
         if delta_scale is not None:
             cmd += ["--delta-scale", str(delta_scale)]
+        if gate_boost is not None:
+            cmd += ["--gate-boost", str(gate_boost)]
         self.process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 
     def action(self, action: int) -> np.ndarray:
@@ -202,6 +204,7 @@ def main() -> None:
     ap.add_argument("--actions", default="/home/adeerkhan/tmp/world/data/actions.bin")
     ap.add_argument("--passes", type=int, default=None)
     ap.add_argument("--delta-scale", type=float, default=None)
+    ap.add_argument("--gate-boost", type=float, default=None)
     ap.add_argument("--env", choices=["firefly", "dungeon"], default="firefly")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--context", type=int, default=4)
@@ -211,7 +214,7 @@ def main() -> None:
     ap.add_argument("--frames", type=Path, default=None)
     args = ap.parse_args()
 
-    client = DreamClient(args.binary, args.ckpt, args.eval_data, args.data, args.passes, args.delta_scale)
+    client = DreamClient(args.binary, args.ckpt, args.eval_data, args.data, args.passes, args.delta_scale, args.gate_boost)
     try:
         if args.script or args.frames:
             if args.frames is None:
