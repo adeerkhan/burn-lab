@@ -975,6 +975,49 @@ enemy assumption). The obvious upgrades are a learned enemy transition inside
 the rollout, a longer horizon with a value function, and a proper terminal
 reward for the exit.
 
+### A playable dungeon game
+
+The state-first model is now a small game. `scripts/dungeon_game.py` adds
+levels, score, three hearts, a minimap, sprite rendering, particles, a
+flickering torch and simple synthesized sound effects. Two learned models drive
+it:
+
+- **Avatar**: a 5-class move model (`stay/up/down/left/right`) trained
+  counterfactually on every state with all five actions. It is **100% exact**
+  on held-out data, because the target cell is fully determined by the walls.
+- **Enemies**: a 5-class move distribution trained on the recorded chase/wander
+  behaviour, about 45% exact next-move accuracy. The policy is genuinely
+  stochastic, so the game samples from it.
+
+`scripts/state_model.py` trains both. `scripts/make_sounds.py` synthesizes
+pickup, hit and level-up WAVs, and `scripts/game_video.py` mixes those events
+into the gameplay video at the exact frames they occurred. The planner is the
+same model-predictive loop: score the learned next cell by BFS distance to the
+nearest diamond or the exit, subtract a proximity penalty for enemies, and
+execute the best action. No policy is trained.
+
+[`docs/dungeon-game.mp4`](../docs/dungeon-game.mp4) is a 60-second, 720-step
+session **with sound**: the agent clears all five diamonds, unlocks the exit,
+reaches level 2 and finishes with score 140. The same run is in
+[`docs/dungeon-game.gif`](../docs/dungeon-game.gif) (silent).
+
+To play it yourself (needs `pygame-ce` for the window and mixer):
+
+```sh
+python3 -m pip install pygame-ce
+python3 scripts/dungeon_game.py --play
+```
+
+Arrow keys move, space generates a new level, `q` quits. `--record` runs the
+planner headlessly and writes the frames/events used for the video.
+
+Honest scope: the avatar is a learned but exact move model; enemies are a
+learned stochastic policy; diamonds and the exit are game rules rather than
+learned transitions; and levels come from the cellular-automaton generator, not
+a learned cave model. The interactive pygame path is written but was not
+exercised in this headless environment — the headless recorder is the tested
+path.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer

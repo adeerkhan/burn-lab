@@ -194,7 +194,9 @@ learns the avatar transition and renders with the known environment: exact
 pixels, 97.7% one-step avatar accuracy, and a
 [60-second comparison](docs/dungeon-state.mp4). The same model then drives a
 [model-predictive agent](docs/dungeon-agent.mp4) that collects all five
-diamonds with zero policy training.
+diamonds with zero policy training, and a
+[playable dungeon game](docs/dungeon-game.mp4) with levels, score, hearts, a
+minimap, sprites and simple sound effects.
 
 ## Repository layout
 
