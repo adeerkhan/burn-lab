@@ -166,6 +166,7 @@ struct Options {
     grid: usize,
     change_prior: f32,
     gate_boost: f32,
+    lr: f32,
 }
 
 impl Default for Options {
@@ -216,6 +217,7 @@ impl Default for Options {
             grid: 16,
             change_prior: -2.0,
             gate_boost: 1.0,
+            lr: 1e-3,
         }
     }
 }
@@ -285,6 +287,7 @@ impl Options {
                 "--grid" => options.grid = value().parse().expect("grid size"),
                 "--change-prior" => options.change_prior = value().parse().expect("change prior"),
                 "--gate-boost" => options.gate_boost = value().parse().expect("gate boost"),
+                "--lr" => options.lr = value().parse().expect("learning rate"),
                 "--world-noise" => options.world_noise = value().parse().expect("world noise"),
                 "--clean-p" => options.clean_p = value().parse().expect("clean probability"),
                 "--attention" => {
@@ -835,7 +838,7 @@ fn train_world_model(options: &Options) {
         };
         let value = loss.clone().into_scalar::<f32>();
         let grads = GradientsParams::from_grads(loss.backward(), &model);
-        model = optimizer.step(1e-3, model, grads);
+        model = optimizer.step(options.lr as f64, model, grads);
 
         if step == 1 || step % 100 == 0 {
             println!("step {step:>5} loss {value:.4}");

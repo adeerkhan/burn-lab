@@ -170,13 +170,13 @@ A second new workload in `diffusion/`: record a FireflyRoom (flashlight, boxes,
 wandering fireflies), tokenize frames to 16x16 integer codes with a VQ-VAE,
 predict the next frame's codes with an action-conditioned spatio-temporal
 transformer, and roll out a dream. All stages train in minutes here; the dream
-moves the objects correctly but is limited by tokenizer blur — see the
+moves the objects correctly but is limited by VQVAE blur — see the
 [10-second clip](docs/world-dream.mp4). Training on the model's own mistakes cut
 the first-10-step error from 36.7 to 25.1, and a pixel-anchored residual head
 that predicts only the *change* brought the 120-step rollout to 21.6 / 36.4 /
 42.6, beating the copy-last-frame baseline. The
 [three-way comparison clip](docs/world-compare.mp4) shows real, dream and the
-trivial baseline side by side; an ablation sweep found that better tokenizer
+trivial baseline side by side; an ablation sweep found that better VQVAE
 reconstruction alone does not improve a long dream. There is also a
 [playable demo](diffusion/README.md#playable-demo) — arrow keys drive both the
 real room and the dream, with space to re-sync — and a
@@ -185,7 +185,7 @@ real room and the dream, with space to re-sync — and a
 A **cellular-automata dungeon** uses the identical pixel format and model: a
 64x64 cave carved by the 4-5 rule, a warm torch, collectible cyan diamonds,
 chasing red enemies and a green exit, recorded as flat u8 frames. A 32x32-code
-tokenizer cuts reconstruction error from 5.41 to 2.65, and two generation bugs
+VQVAE cuts reconstruction error from 5.41 to 2.65, and two generation bugs
 (tiny-pocket starts and predictable actions) were fixed along the way — see the
 [dungeon section](diffusion/README.md#cellular-automata-dungeons) and the
 [60-second rollout](docs/dungeon-grid32-long.mp4). The next step, a
@@ -197,6 +197,11 @@ pixels, 97.7% one-step avatar accuracy, and a
 diamonds with zero policy training, and a
 [playable dungeon game](docs/dungeon-game2.mp4) with BSP rooms and corridors,
 levels, score, hearts, a minimap, smaller sprites and simple sound effects.
+
+The original **pixel** path is still developed alongside it: a 32x32 VQVAE
+(K=512, D=64) now reconstructs a dungeon frame to **0.88 MAE**, and the
+transformer dream is in [`docs/pixel-dream.mp4`](docs/pixel-dream.mp4). The
+VQVAE is no longer the bottleneck; the transformer dynamics is.
 
 ## Repository layout
 

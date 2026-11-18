@@ -546,14 +546,14 @@ real room -> frames + actions -> VQ-VAE -> 16x16 codes -> dynamics -> next codes
    boxes, a flashlight with tank controls, exact 2D ray casting for shadows, and
    1-2 fireflies that wander and bounce. 400 episodes of 129 frames at 64x64
    were recorded with a scripted driver (30% stay, 35% forward, the rest turn).
-2. **Tokenizer.** `world_vq.rs`: a VQ-VAE compresses each frame to a 16x16 grid
+2. **VQVAE.** `world_vq.rs`: a VQ-VAE compresses each frame to a 16x16 grid
    of code ids. The encoder has three stride-2/1x1 stages; the decoder mirrors
    it with transposed convolutions. A codebook of K vectors is updated by the
    **EMA of the encoder outputs assigned to each code**, and dead codes are
    restarted from random vectors in the batch. Loss: L1 + MSE reconstruction, an
    L1 edge loss, and 0.25x commitment. The reference tried a GAN critic and
    removed it because it went unstable; this port follows that finding.
-3. **Tokenise once.** `world-encode` writes a flat i64 file of codes (101 MB);
+3. **Encode once.** `world-encode` writes a flat i64 file of codes (101 MB);
    the dynamics model never sees pixels.
 4. **Dynamics.** `world_model.rs`: a small Genie-style transformer. Each frame
    is `code embedding + position in the 16x16 grid + frame slot + the action
@@ -573,7 +573,7 @@ real room -> frames + actions -> VQ-VAE -> 16x16 codes -> dynamics -> next codes
 
 ```sh
 python3 scripts/world_env.py --episodes 400 --steps 128
-python3 scripts/world_tokenize.py
+python3 scripts/world_pack.py
 cargo run -p diffusion --release -- world-vq --backend wgpu \
     --steps 8000 --batch 8 --dim 48 --timesteps 256 --out /tmp/world/vq
 cargo run -p diffusion --release -- world-encode --backend wgpu \
@@ -599,8 +599,8 @@ cargo run -p diffusion --release -- world-dream --backend wgpu \
 | Stage | Result |
 | --- | --- |
 | Recorded data | 400 x 129 frames, 64x64, 634 MB flat u8 + 51 KB actions |
-| Tokenizer, K=64, 1,500 steps | rec loss ~0.3; dream MAE 31.7 / 36.9 / 40.2 (steps 1-10 / 11-30 / 31+) |
-| Tokenizer, K=256, 8,000 steps | rec loss ~0.15, 73 s, peak 1.6 GB |
+| VQVAE, K=64, 1,500 steps | rec loss ~0.3; dream MAE 31.7 / 36.9 / 40.2 (steps 1-10 / 11-30 / 31+) |
+| VQVAE, K=256, 8,000 steps | rec loss ~0.15, 73 s, peak 1.6 GB |
 | Dynamics, 2,000 steps | loss 4.29 -> 0.12, 41 s |
 | Dream, K=256, absolute codes | MAE 36.7 / 45.3 / 44.5 — structured but blurry |
 | Dream, K=256, pixel-anchored residual | MAE 21.6 / 36.4 / 42.6 — beats the copy baseline |
@@ -614,16 +614,16 @@ actions for the dream while the real frames came from a scripted driver, which
 made the error numbers meaningless.
 
 The dream moves the flashlight, boxes and fireflies in roughly the right
-places, but every frame is soft. **The bottleneck is the tokenizer, not the
+places, but every frame is soft. **The bottleneck is the VQVAE, not the
 dynamics**: 16x16 codes at 64x64 mean each token carries a 4x4 pixel patch, and
 a dim-48 codebook trained for 73 s cannot hold sharp edges. The reference needed
-a much longer tokenizer run and 9.8M-parameter dynamics for its playable dream.
+a much longer VQVAE run and 9.8M-parameter dynamics for its playable dream.
 
 Three real bugs were found and fixed while building this: EMA codebook tensors
 must be detached before becoming parameters; nearest-code assignment used
 `argmax` on squared distances (assigning each vector to its *farthest* code),
 which made reconstruction blow up from 0.3 to 10; and the dynamics head had the
-code count hard-coded to 64, silently breaking when the tokenizer used 256.
+code count hard-coded to 64, silently breaking when the VQVAE used 256.
 
 ### What is different from the reference
 
@@ -648,7 +648,7 @@ both, and predicted the mask code for context frames) changed the dream error:
 | Mask every frame + corrupt context | **25.1** | **35.1** | 46.2 |
 
 One-step prediction improved by 32%; the later drift is still there, which is
-expected — the tokenizer's blur compounds over a long rollout. This is the
+expected — the VQVAE's blur compounds over a long rollout. This is the
 single most useful thing learned from porting this project.
 
 ### Where the error really comes from
@@ -685,7 +685,7 @@ The fix is to stop asking the transformer to reconstruct the whole frame. With
    delta, gated by the predicted change probability:
    `dream = last_pixels + p * (decode(new) - decode(copy))`.
 
-Point 2 matters because decoding *any* real frame through this tokenizer costs
+Point 2 matters because decoding *any* real frame through this VQVAE costs
 5.67 MAE, already worse than a plain copy (3.45). A from-scratch decode can
 never beat a copy; anchoring on the real pixels can. The target frame is also
 always fully masked during training now, matching what the model sees at
@@ -705,7 +705,7 @@ The residual model is close to the copy baseline at one step but does not beat
 it: a wrong code still adds a noisy delta. Longer training (6,000 steps) made
 this worse, and scaling the delta past 0.5 hurt — the token-level signal is the
 limit. Over a **120-step rollout**, however, anchoring on real pixels stops the
-tokenizer's reconstruction error from compounding, and the model wins:
+VQVAE's reconstruction error from compounding, and the model wins:
 
 | 120-step rollout | Steps 1-10 | 11-30 | 31+ |
 | --- | ---: | ---: | ---: |
@@ -738,28 +738,28 @@ already decided that most tokens should not change:
 
 Iterative decoding trades a little one-step accuracy for better long-rollout
 coherence, which is what a dream needs. It cannot fix the dominant blur: each
-token still covers a 4x4 pixel patch, so the tokenizer, not the decoder, is the
-visual ceiling. The sharper levers are a longer K=512 tokenizer, a grid of 32
+token still covers a 4x4 pixel patch, so the VQVAE, not the decoder, is the
+visual ceiling. The sharper levers are a longer K=512 VQVAE, a grid of 32
 (2x2 pixel patches), a detail decoder, or factorising the static box layout out
 of the prediction target.
 
 ### Ablations: what did not help
 
 A systematic sweep found that the 2,000-step residual model with the 8k-step
-K=256 tokenizer is a local optimum. Each change below was trained and scored on
+K=256 VQVAE is a local optimum. Each change below was trained and scored on
 the same 120-step rollout; none beat it overall.
 
 | Change | Reconstruction ceiling | 120-step: 1-10 / 11-30 / 31+ | Verdict |
 | --- | ---: | --- | --- |
 | Current best (K=256, 8k tok., 2k dynamics) | 5.67 | 21.64 / 36.33 / **42.21** | best |
-| Tokenizer K=512, D=64, 24k steps | **3.07** | 21.44 / 35.74 / 44.48 | sharper frames, worse drift |
-| Tokenizer K=256, 24k steps | 3.61 | 21.85 / 35.50 / 46.40 | better mid, much worse late |
+| VQVAE K=512, D=64, 24k steps | **3.07** | 21.44 / 35.74 / 44.48 | sharper frames, worse drift |
+| VQVAE K=256, 24k steps | 3.61 | 21.85 / 35.50 / 46.40 | better mid, much worse late |
 | Context corruption 0.3 / 0.5 | 5.67 | 24.32 / 36.85 / 46.28 | worse |
 | Token feedback instead of re-encoding | 5.67 | 22.16 / 36.62 / 46.46 | worse |
 | Dynamics trained 6,000 steps | 5.67 | 24.42 / 36.59 / 44.63 | worse |
 
 The important lesson: **better reconstruction does not produce a better
-dream.** The K=512 tokenizer cut reconstruction error almost in half (5.67 ->
+dream.** The K=512 VQVAE cut reconstruction error almost in half (5.67 ->
 3.07) but the finer codes are harder for the dynamics model to predict, so the
 rollout drifts faster and the frames develop blocky artifacts. Re-encoding each
 predicted frame back into tokens also looks wasteful but acts as useful
@@ -767,10 +767,10 @@ regularisation — feeding the model's own ids straight back made the dream
 worse. More corruption and longer dynamics training both overfit the one-step
 objective at the expense of long-rollout coherence.
 
-The honest conclusion is that the dynamics model, not the tokenizer or the
+The honest conclusion is that the dynamics model, not the VQVAE or the
 decoder, now limits long dreams. The next real step is to change *how* it is
 trained for rollout (unrolled self-imitation or a pixel-difference residual
-head), not to keep tuning the tokenizer.
+head), not to keep tuning the VQVAE.
 
 ### Three-way comparison video
 
@@ -789,7 +789,7 @@ now have that too. A 10-second playthrough is in
 [`docs/world-play.mp4`](../docs/world-play.mp4); it was produced by the headless
 mode of the player, so it is the same code path a human drives.
 
-`world-play` is a small inference server: it loads the tokenizer and world
+`world-play` is a small inference server: it loads the VQVAE and world
 model once, then reads commands from stdin and streams one 64x64 RGB dream
 frame per action. `scripts/world_play.py` drives the real FireflyRoom next to
 it and sends the same key presses to both:
@@ -836,7 +836,7 @@ Two generation bugs were fixed after the first dungeon video looked wrong:
   input and still predict well. The navigator now acts randomly 45% of the
   time, so only the action explains the next frame.
 
-The tokenizer was also upgraded from 16x16 to **32x32 codes** (2x2-pixel
+The VQVAE was also upgraded from 16x16 to **32x32 codes** (2x2-pixel
 patches) with `--grid 32`. That cuts reconstruction error from **5.41 to 2.65**
 and is the main pixel-quality improvement; the dynamics model and the video
 path are unchanged except for the token count.
@@ -1018,13 +1018,48 @@ a learned cave model. The interactive pygame path is written but was not
 exercised in this headless environment — the headless recorder is the tested
 path.
 
+### Pixel world model: the VQVAE + transformer path
+
+The pixel stack is the original research path and is now substantially better
+than the first port. A new 32x32 BSP dungeon is rendered at two pixels per cell
+(`scripts/pixel_env.py`), so rooms and corridors are readable at 64x64. The
+VQVAE uses a **32x32 grid of codes (2x2-pixel patches), K=512, D=64**, trained
+for 12k steps.
+
+| Pixel stack | Value |
+| --- | ---: |
+| VQVAE reconstruction ceiling | **0.88 MAE** |
+| World model one-step (`--delta-scale 0.1`) | 3.20 |
+| Copy-last-frame one-step | 2.85 |
+| 120-step dream, scale 0.1 | 9.13 / 7.71 / 10.88 |
+| 120-step copy baseline | 8.20 / 6.22 / 8.39 |
+
+The VQVAE is now excellent: 0.88 reconstruction error means the codes carry
+almost everything. The **transformer dynamics is the remaining bottleneck**.
+It is a dim-64, 2-layer, 4-head model trained for 12k steps at batch 4 (~1.25
+epochs); the loss still oscillates around 1.7, the one-step error is above a
+plain copy, and the dream is softer and drifts faster than the state-first
+renderer.
+
+[`docs/pixel-dream.mp4`](../docs/pixel-dream.mp4) is the 10-second real-vs-dream
+clip at 12 fps. The rooms and icons survive; the walls soften and enemy colours
+smear after a few dozen steps.
+
+Why the MLPs existed: the earlier pixel stack used a 16x16 grid and a smaller
+transformer, with a 5.67 reconstruction ceiling and a 25/35/46 dream, and it
+ignored the action because of the `NO_ACTION` inference bug. The state-first
+model was a workaround for those failures. With the high-resolution VQVAE the
+representation is no longer the problem — closing the gap now requires a
+larger/longer-trained transformer or a better dynamics objective, not a new
+VQVAE.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer
 training run and ~10x the parameters.
 
 This is a working miniature of the whole idea, not a playable dream. To get
-there: train the residual head against pixel differences, train the tokenizer
+there: train the residual head against pixel differences, train the VQVAE
 for much longer, add 3D RoPE and the anchor frame, and build an interactive
 player.
 

@@ -1,5 +1,5 @@
-//! A small VQ-VAE tokenizer for 64x64 frames: 16x16 integer codes (K=64, D=32)
-//! and back. Ported from the tokenizer in `avbiswas/computer_vision_recipes`,
+//! A small VQVAE for 64x64 frames: 16x16 integer codes (K=64, D=32)
+//! and back. Ported from the VQVAE in `avbiswas/computer_vision_recipes`,
 //! with the codebook updated by EMA of assigned encoder outputs and dead codes
 //! restarted from random vectors in the batch.
 //!
