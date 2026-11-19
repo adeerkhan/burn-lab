@@ -1140,6 +1140,30 @@ action finally has a visible effect. The decoded buildings are still noisy at
 [`docs/city-dream.mp4`](../docs/city-dream.mp4) shows the result. The proxy is
 recorded as before and remains the next step for conditioning.
 
+#### First-person correction
+
+The city was rebuilt again as a **first-person driver's view**, which is what
+the racing demo actually uses: you sit inside the car, the hood fills the
+bottom, towers line both sides, the road bends left or right at intersections,
+and police cars chase you in a **rear-view mirror** at the top with alternating
+red/blue lights. A wireframe proxy is still recorded alongside the frame.
+
+| First-person city | Value |
+| --- | ---: |
+| VQVAE ceiling | 2.32 MAE |
+| One-step: model / copy | 19.35 / 18.73 |
+| 120-step dream | 20.44 / 35.52 / 41.47 |
+| 120-step copy | 15.84 / 24.57 / 21.01 |
+
+The view is right, but the fast first-person scroll is hard: the model loses to
+copy, though replacing the action changes 33-41% of codes and 1.1-1.5 MAE of
+pixels, so the action clearly reaches the image. The mirror police, the bend
+and the towers are visible in the decoded frames but noisy at 64x64 after 4k
+steps. This is the correct starting point, not the finished renderer.
+
+[`docs/first-person-city.mp4`](../docs/first-person-city.mp4) is the 10-second
+real-vs-dream clip.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer

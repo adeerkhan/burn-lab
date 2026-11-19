@@ -265,3 +265,11 @@ A rebuilt racing world with real left/right turns at intersections, varied
 buildings, sidewalks, lane markings and police that follow the same turns.
 Its VQVAE + transformer dream beats a copy baseline:
 [`docs/city-dream.mp4`](docs/city-dream.mp4).
+
+### First-person city chase
+
+The racing world is now a first-person driver's view: hood at the bottom,
+towers on both sides, roads that bend at intersections, and police chasing in
+a rear-view mirror. The first VQVAE + transformer dream is in
+[`docs/first-person-city.mp4`](docs/first-person-city.mp4); the view is correct
+but the model still loses to a copy baseline.
