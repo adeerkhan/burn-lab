@@ -1204,6 +1204,28 @@ The scene reads as a city chase; the model is still near copy and noisy.
 
 [`docs/chase-skyline.mp4`](../docs/chase-skyline.mp4) shows the result.
 
+#### Vice City
+
+The chase scene became a Vice City boulevard: a low sun at the end of the road,
+palm trees on both sides, neon signs on tall buildings with widely different
+heights, a detailed red player car and blue police cars with flashing bars
+behind it. 600 episodes x 129 frames were recorded, and the VQVAE and
+transformer were trained much longer (16k and 12k steps).
+
+| Vice City | Value |
+| --- | ---: |
+| VQVAE ceiling | 3.30 MAE |
+| One-step: model / copy | 28.53 / 28.72 |
+| 120-step dream | **31.93 / 36.79 / 39.44** |
+| 120-step copy | 32.62 / 40.28 / 37.58 |
+
+The dream now beats a copy baseline at every range and the sunset/palms/neon
+are visible, but the decoded buildings are still noisy — 64x64 with 512 codes
+carries limited detail. More data and longer training improved the score; the
+remaining gap is the renderer and the proxy conditioning.
+
+[`docs/vice-city.mp4`](../docs/vice-city.mp4) is the clip.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer
