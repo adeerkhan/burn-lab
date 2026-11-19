@@ -1185,6 +1185,25 @@ late. Action substitution changes 16-29% of codes and 0.3-0.6 MAE of pixels.
 
 [`docs/third-person-chase.mp4`](../docs/third-person-chase.mp4) is the clip.
 
+#### Taller skyline and real corners
+
+The chase scene was rebuilt again: buildings now tower to the top of the frame
+with widely varied heights, facade rows and lit windows; distant silhouettes
+sit at the vanishing point. Corners are drawn as a shifting vanishing point
+with a cross street, so the road turns instead of shearing. Police cars sit
+behind the player, approach smoothly with flashing light bars and a glow on
+the road, and react to speed and bends.
+
+| Tall-skyline chase | Value |
+| --- | ---: |
+| VQVAE ceiling | 3.44 MAE |
+| One-step: model / copy | 28.40 / 28.32 |
+| 120-step dream | 35.12 / 35.43 / 39.36 |
+
+The scene reads as a city chase; the model is still near copy and noisy.
+
+[`docs/chase-skyline.mp4`](../docs/chase-skyline.mp4) shows the result.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer

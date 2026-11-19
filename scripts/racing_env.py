@@ -1,11 +1,11 @@
-"""Third-person GTA-style city chase with a detailed car and Manhattan blocks.
+"""Third-person Manhattan chase with real corners, towering blocks and police.
 
     python3 scripts/racing_env.py --preview
-    python3 scripts/racing_env.py --episodes 300 --steps 128 --out /tmp/chase/data
+    python3 scripts/racing_env.py --episodes 300 --steps 128 --out /tmp/chase2/data
 
-Camera follows behind the player's car. Tall varied buildings line the street,
-a distant skyline sits at the vanishing point, and police cars close in behind
-with flashing light bars. Two views are recorded: the pixel frame and a proxy.
+Road corners are drawn as a shifting vanishing point with a cross street, not a
+straight diagonal. Buildings vary wildly in height and style. Police approach
+smoothly from behind with flashing bars and a glow on the road.
 """
 
 import argparse
@@ -16,20 +16,18 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 SIZE = 64
-HORIZON = 14
-ROAD = (66, 68, 74)
-SIDEWALK = (105, 107, 112)
+HORIZON = 12
+ROAD = (62, 64, 70)
+SIDEWALK = (100, 103, 108)
 LANE = (230, 228, 205)
+SKY = (245, 178, 120)
 BUILDINGS = [
-    (120, 118, 126), (142, 130, 112), (105, 124, 145), (130, 108, 105),
-    (150, 145, 135), (110, 132, 120), (138, 122, 140), (125, 140, 150),
+    (125, 122, 130), (150, 138, 120), (105, 128, 150), (140, 110, 108),
+    (160, 152, 140), (115, 138, 125), (145, 128, 150), (130, 145, 158),
 ]
-RED = (220, 55, 45)
-RED_DARK = (140, 30, 28)
-POLICE = (45, 70, 170)
+ACTIONS = ["stay", "left", "right", "accelerate", "brake"]
 FLASH_RED = (255, 60, 60)
 FLASH_BLUE = (70, 150, 255)
-ACTIONS = ["stay", "left", "right", "accelerate", "brake"]
 
 
 class ChaseWorld:
@@ -38,42 +36,50 @@ class ChaseWorld:
         self.seed = seed
         self.distance = 0.0
         self.speed = 1.4
-        self.curve = 0.0
-        self.turn = 0
-        self.turn_left = False
+        self.turn_phase = 0.0
+        self.turn_direction = 0
         self.intersection = False
-        self.police = [4.0, 7.0]
+        self.police = [5.0, 9.0]
         self.time = 0
 
     def step(self, action: int) -> None:
         action = int(action)
-        if self.intersection and action in (1, 2) and self.turn == 0:
-            self.turn = 10
-            self.turn_left = action == 1
+        if self.intersection and action in (1, 2) and self.turn_phase == 0:
+            self.turn_direction = -1 if action == 1 else 1
+            self.turn_phase = 1.0
         if action == 3:
-            self.speed = min(2.6, self.speed + 0.35)
+            self.speed = min(2.7, self.speed + 0.35)
         elif action == 4:
             self.speed = max(0.4, self.speed - 0.35)
-        if self.turn > 0:
-            self.curve = float(np.clip(self.curve + (-0.10 if self.turn_left else 0.10), -0.85, 0.85))
-            self.turn -= 1
-        else:
-            self.curve *= 0.94
+        if self.turn_phase > 0:
+            self.turn_phase = max(0.0, self.turn_phase - 0.11)
         self.distance += self.speed
         self.time += 1
-        self.intersection = (self.distance % 26) < 1.4
+        self.intersection = (self.distance % 30) < 1.6
         for index, gap in enumerate(self.police):
-            target = 1.0 + (self.speed - 1.0) * 3.2 + abs(self.curve) * 1.2 + index * 1.8
-            target = float(np.clip(target + self.rng.normal(0, 0.1), 0.7, 15.0))
-            self.police[index] = gap * 0.7 + target * 0.3
+            target = 1.0 + (self.speed - 1.0) * 3.4 + abs(self.turn_direction) * 1.4 * self.turn_phase
+            target += index * 2.0 + self.rng.normal(0, 0.08)
+            target = float(np.clip(target, 0.8, 16.0))
+            self.police[index] = gap * 0.78 + target * 0.22
 
-    def _centre(self, y: int) -> float:
-        t = (y - HORIZON) / max(1, SIZE - HORIZON)
-        return 32.0 + self.curve * (1.0 - t) * 18.0
+    def _vanish(self) -> float:
+        # A corner shifts the vanishing point to the side; it eases back when
+        # the turn is complete, so the road curves rather than shearing.
+        strength = np.sin(self.turn_phase * np.pi) if self.turn_phase > 0 else 0.0
+        return 32.0 + self.turn_direction * strength * 22.0
 
-    def _half(self, y: int) -> float:
+    @staticmethod
+    def _lerp(a, b, t):
+        return a * (1 - t) + b * t
+
+    def road_centre(self, y: int) -> float:
         t = (y - HORIZON) / max(1, SIZE - HORIZON)
-        return 2.0 + t * 30.0
+        v = self._vanish()
+        return self._lerp(32.0, v, (1 - t) ** 1.5)
+
+    def road_half(self, y: int) -> float:
+        t = (y - HORIZON) / max(1, SIZE - HORIZON)
+        return 2.0 + t * 31.0
 
     def _sky(self, draw, proxy: bool) -> None:
         if proxy:
@@ -81,21 +87,21 @@ class ChaseWorld:
             return
         for y in range(HORIZON):
             t = y / max(1, HORIZON)
-            colour = (int(255 - 70 * t), int(190 - 60 * t), int(130 + 50 * t))
-            draw.line([(0, y), (SIZE, y)], fill=colour)
-        # Distant skyline at the vanishing point.
-        for i in range(14):
-            x = i * 5
-            height = 2 + (i * 7 + self.seed) % 7
-            draw.rectangle((x, HORIZON - height, x + 4, HORIZON),
-                           fill=(110, 105, 115), outline=(70, 70, 78))
+            draw.line([(0, y), (SIZE, y)], fill=(int(235 + 10 * t), int(165 + 15 * t), int(120 + 20 * t)))
+        for i in range(16):
+            x = i * 4
+            height = 3 + (i * 7 + self.seed) % 11
+            draw.rectangle((x, HORIZON - height, x + 3, HORIZON),
+                           fill=(105, 102, 112), outline=(70, 68, 76))
 
     def _road(self, draw, proxy: bool) -> None:
-        ct, cb = self._centre(HORIZON), self._centre(SIZE)
-        ht, hb = self._half(HORIZON), self._half(SIZE)
+        ct, cb = self.road_centre(HORIZON), self.road_centre(SIZE)
+        ht, hb = self.road_half(HORIZON), self.road_half(SIZE)
         if proxy:
-            draw.line([(ct - ht, HORIZON), (cb - hb, SIZE)], fill=(220, 220, 220))
-            draw.line([(ct + ht, HORIZON), (cb + hb, SIZE)], fill=(220, 220, 220))
+            draw.line([(ct - ht, HORIZON), (cb - hb, SIZE)], fill=(225, 225, 225))
+            draw.line([(ct + ht, HORIZON), (cb + hb, SIZE)], fill=(225, 225, 225))
+            if self.intersection:
+                draw.line([(0, HORIZON + 5), (SIZE, HORIZON + 5)], fill=(180, 180, 180))
         else:
             draw.polygon([(ct - ht - 3, HORIZON), (ct + ht + 3, HORIZON),
                           (cb + hb + 4, SIZE), (cb - hb - 4, SIZE)], fill=SIDEWALK)
@@ -105,76 +111,94 @@ class ChaseWorld:
             for i in range(9):
                 phase = (i + (self.distance * 0.1) % 1.0) / 9.0
                 y = int(HORIZON + 1 + (phase ** 1.7) * (SIZE - HORIZON))
-                c = self._centre(y)
-                offset = int(lane * (2 + phase * 9))
+                c = self.road_centre(y)
+                offset = int(lane * (3 + phase * 10))
                 mark = max(1, int(1 + phase * 2))
                 draw.line([(c + offset, y - mark), (c + offset, y + mark)],
-                          fill=(205, 205, 195) if proxy else LANE, width=1)
+                          fill=(210, 208, 195) if proxy else LANE, width=1)
+        if self.intersection and not proxy:
+            y = HORIZON + 5
+            c = self.road_centre(y)
+            for x in range(int(c - 12), int(c + 12), 4):
+                draw.line([(x, y), (x + 2, y + 2)], fill=(235, 235, 225), width=1)
 
     def _buildings(self, draw, proxy: bool) -> None:
         for side in (-1, 1):
-            for i in range(11):
-                phase = (i + (self.distance * 0.1) % 1.0) / 11.0
-                depth = phase ** 1.7
+            for i in range(8):
+                phase = (i + (self.distance * 0.1) % 1.0) / 8.0
+                depth = phase ** 1.5
                 y0 = int(HORIZON + depth * (SIZE - HORIZON))
-                c = self._centre(y0)
-                half = self._half(y0)
-                width = int(3 + depth * 13)
-                height = int(6 + depth * 30)
+                c = self.road_centre(y0)
+                half = self.road_half(y0)
+                # Wildly varied heights: some mid-rise, some towers.
+                seed = (i * 17 + self.seed + (side + 1) * 31) % 19
+                height = int(10 + depth * 38 + seed * 2.2)
+                width = int(5 + depth * 12 + seed % 4)
                 x_edge = c + side * (half + 2)
-                box = (x_edge if side > 0 else x_edge - width,
-                       max(2, y0 - height),
-                       x_edge + width if side > 0 else x_edge,
-                       min(SIZE, y0 + int(2 + depth * 4)))
-                colour = (185, 185, 185) if proxy else BUILDINGS[(i + self.seed + (side + 1)) % len(BUILDINGS)]
+                top = max(1, y0 - height)
+                box = (x_edge if side > 0 else x_edge - width, top,
+                       x_edge + width if side > 0 else x_edge, min(SIZE, y0 + 3))
+                colour = (195, 195, 195) if proxy else BUILDINGS[(i + seed) % len(BUILDINGS)]
                 if not proxy and depth < 0.4:
-                    colour = tuple(int(v * 0.8) for v in colour)
-                draw.rectangle(box, fill=colour, outline=(25, 25, 30) if not proxy else None)
-                if not proxy and depth > 0.1:
-                    rows = max(1, int(height / 5))
-                    cols = max(1, int(width / 3))
-                    for col in range(cols):
-                        for row in range(rows):
-                            wx = box[0] + 1 + col * max(2, width // max(1, cols))
-                            wy = box[1] + 2 + row * 4
-                            if wx + 1 < box[2] and wy + 1 < box[3]:
-                                lit = (col * 3 + row * 5 + i + self.seed) % 7 < 3
-                                draw.rectangle((wx, wy, wx + 1, wy + 1),
-                                               fill=(245, 225, 150) if lit else (60, 70, 85))
+                    colour = tuple(int(v * 0.82) for v in colour)
+                draw.rectangle(box, fill=colour, outline=(30, 30, 36) if not proxy else None)
+                if not proxy:
+                    # Facade rows and varied lit windows.
+                    rows = max(2, int(height / 6))
+                    cols = max(1, int(width / 4))
+                    for row in range(rows):
+                        wy = top + 3 + row * 5
+                        if wy > box[3] - 2:
+                            break
+                        for col in range(cols):
+                            wx = box[0] + 2 + col * 4
+                            if wx + 1 >= box[2]:
+                                continue
+                            lit = (row * 5 + col * 3 + i + seed) % 9 < 4
+                            draw.rectangle((wx, wy, wx + 1, wy + 1),
+                                           fill=(255, 232, 170) if lit else (55, 65, 80))
+                    if depth > 0.55 and seed % 3 == 0:
+                        draw.rectangle((box[0] + 1, top + 1, box[2] - 1, top + 3),
+                                       fill=(90, 95, 110))
+                        draw.line([(box[0] + 2, top), (box[0] + 2, top - 4)], fill=(60, 60, 65))
+
+    def _glow(self, draw, x: float, y: int, colour) -> None:
+        for radius in (7, 5, 3):
+            shade = tuple(int(v * (0.6 + radius * 0.05)) for v in colour)
+            draw.ellipse((x - radius, y - radius // 2, x + radius, y + radius // 2), outline=shade)
+
+    def _car(self, draw, x: float, y: int, width: int, height: int,
+             colour, police: bool, proxy: bool, flash: bool, depth: float = 0.5) -> None:
+        left, right = x - width, x + width
+        top = y - height
+        if proxy:
+            draw.rectangle((left, top, right, y), outline=(255, 255, 255))
+            return
+        draw.ellipse((left - 2, y - 2, right + 2, y + 3), fill=(20, 20, 24))
+        draw.rectangle((left, top + 2, right, y - 1), fill=colour, outline=(15, 15, 20))
+        draw.polygon([(left + 1, top + 2), (left + 3, top), (right - 3, top), (right - 1, top + 2)],
+                     fill=tuple(int(v * 0.75) for v in colour))
+        draw.rectangle((left + 2, top, right - 2, top + 2), fill=(80, 130, 175) if not police else (40, 70, 140))
+        draw.rectangle((left, y - 3, left + 2, y - 1), fill=(255, 90, 70))
+        draw.rectangle((right - 2, y - 3, right, y - 1), fill=(255, 90, 70))
+        if police:
+            draw.rectangle((x - 2, top - 1, x + 2, top), fill=FLASH_RED if flash else FLASH_BLUE)
+            if depth > 0.5:
+                self._glow(draw, x, top, FLASH_RED if flash else FLASH_BLUE)
 
     def _player(self, draw, proxy: bool) -> None:
-        y = 49
-        c = self._centre(y)
-        if proxy:
-            draw.rectangle((c - 7, y - 6, c + 7, y + 6), outline=(255, 255, 255))
-            return
-        draw.ellipse((c - 9, y + 3, c + 9, y + 8), fill=(20, 20, 24))
-        draw.rectangle((c - 7, y - 5, c + 7, y + 5), fill=RED, outline=(20, 20, 24))
-        draw.polygon([(c - 5, y - 5), (c - 3, y - 9), (c + 3, y - 9), (c + 5, y - 5)],
-                     fill=RED_DARK)
-        draw.rectangle((c - 3, y - 8, c + 3, y - 5), fill=(70, 120, 160))
-        draw.rectangle((c - 6, y + 1, c - 3, y + 4), fill=(255, 70, 60))
-        draw.rectangle((c + 3, y + 1, c + 6, y + 4), fill=(255, 70, 60))
-        draw.rectangle((c - 2, y + 3, c + 2, y + 4), fill=(40, 40, 45))
-        draw.rectangle((c - 8, y - 3, c - 7, y + 3), fill=(15, 15, 18))
-        draw.rectangle((c + 7, y - 3, c + 8, y + 3), fill=(15, 15, 18))
+        x = self.road_centre(48) + (self.turn_direction * self.turn_phase * 3)
+        self._car(draw, x, 48, 6, 8, (225, 60, 52), False, proxy, False)
 
     def _police(self, draw, proxy: bool) -> None:
         for index, gap in enumerate(self.police):
-            y = int(np.clip(60 - gap * 0.7, 50, 62))
-            c = self._centre(y) + (index - 0.5) * 12
-            if proxy:
-                draw.rectangle((c - 5, y - 5, c + 5, y + 5), outline=(255, 255, 255))
-                continue
-            draw.ellipse((c - 6, y + 3, c + 6, y + 7), fill=(20, 20, 24))
-            draw.rectangle((c - 5, y - 5, c + 5, y + 5), fill=POLICE, outline=(15, 15, 22))
-            draw.polygon([(c - 4, y - 5), (c - 2, y - 8), (c + 2, y - 8), (c + 4, y - 5)],
-                         fill=(30, 50, 130))
-            draw.rectangle((c - 2, y - 7, c + 2, y - 5), fill=(90, 140, 200))
-            flash = FLASH_RED if (self.time + index) % 6 < 3 else FLASH_BLUE
-            draw.rectangle((c - 3, y - 9, c + 3, y - 7), fill=flash)
-            draw.rectangle((c - 4, y + 2, c - 2, y + 4), fill=(255, 90, 70))
-            draw.rectangle((c + 2, y + 2, c + 4, y + 4), fill=(255, 90, 70))
+            depth = float(np.clip(1.0 - gap / 16.0, 0.02, 0.95))
+            y = int(62 - depth * 8)
+            width = max(2, int(2 + depth * 4))
+            height = max(2, int(2 + depth * 5))
+            x = self.road_centre(y) + (index - 0.5) * (width + 4)
+            self._car(draw, x, y, width, height, (45, 75, 185), True, proxy,
+                      (self.time + index) % 8 < 4, depth)
 
     def render(self, proxy: bool = False) -> np.ndarray:
         image = Image.new("RGB", (SIZE, SIZE))
@@ -189,14 +213,14 @@ class ChaseWorld:
 
 def policy(world: ChaseWorld, rng):
     while True:
-        if world.turn > 0:
+        if world.turn_phase > 0:
             yield 0
-        elif world.intersection and rng.random() < 0.55:
+        elif world.intersection and rng.random() < 0.6:
             yield 1 if rng.random() < 0.5 else 2
-        elif rng.random() < 0.25:
+        elif rng.random() < 0.22:
             yield int(rng.integers(5))
         elif rng.random() < 0.5:
-            yield 3 if world.speed < 2.0 else 0
+            yield 3 if world.speed < 2.1 else 0
         else:
             yield 0
 
@@ -206,7 +230,7 @@ def main() -> None:
     ap.add_argument("--preview", action="store_true")
     ap.add_argument("--episodes", type=int, default=300)
     ap.add_argument("--steps", type=int, default=128)
-    ap.add_argument("--out", type=Path, default=Path("/tmp/chase/data"))
+    ap.add_argument("--out", type=Path, default=Path("/tmp/chase2/data"))
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
     if args.preview:
@@ -218,7 +242,7 @@ def main() -> None:
                         (t * SIZE * 3, 0))
             for _ in range(16):
                 world.step(next(walk))
-        strip.save("/tmp/opencode/chase-preview.png")
+        strip.save("/tmp/opencode/chase2-preview.png")
         print("wrote preview")
         return
     args.out.mkdir(parents=True, exist_ok=True)

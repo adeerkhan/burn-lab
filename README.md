@@ -279,3 +279,9 @@ but the model still loses to a copy baseline.
 A third-person city chase with a detailed red player car, blue police cars with
 flashing light bars, tall Manhattan-style blocks and a distant skyline. First
 dream: [`docs/third-person-chase.mp4`](docs/third-person-chase.mp4).
+
+### Tall-skyline chase
+
+A third-person chase with towering varied Manhattan-style blocks, real road
+corners and police approaching smoothly from behind. Clip:
+[`docs/chase-skyline.mp4`](docs/chase-skyline.mp4).
