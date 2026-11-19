@@ -248,3 +248,12 @@ loader layout test that pins channel order.
 - [Burn](https://github.com/tracel-ai/burn) by Tracel AI, MIT/Apache-2.0.
 
 This port is MIT.
+
+### A racing world
+
+A second world model, inspired by inclusionAI/CodeWorldModel: a pseudo-3D road
+with side buildings, a player car and chasing police. It records both a pixel
+frame and a wireframe proxy, so a renderer can be conditioned on structure
+later. The first VQVAE + transformer dream is in
+[`docs/racing-dream.mp4`](docs/racing-dream.mp4); the frame works, but the model
+does not yet beat a copy baseline.

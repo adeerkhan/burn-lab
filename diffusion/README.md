@@ -1082,6 +1082,33 @@ This is the practical form of the state + pixel hybrid: each part does what it
 is good at. The next step is to replace the observed entity state with the
 learned state model, so the whole frame is generated.
 
+### A second world: the racing dream
+
+Inspired by inclusionAI/CodeWorldModel: keep the world state in an engine,
+describe it with a **structural proxy**, and let a renderer make the pixels.
+`scripts/racing_env.py` is the smallest version — a pseudo-3D road, buildings
+with windows on both sides, a player car and police cars with flashing lights.
+It renders two 64x64 views of the same state: the pixel frame and a wireframe
+proxy that fixes the road, buildings and cars. 200 episodes x 129 frames were
+recorded as flat u8 files (frames, proxy, actions).
+
+| Racing pixel model | Value |
+| --- | ---: |
+| VQVAE reconstruction ceiling | 1.77 MAE |
+| One-step: world model / copy | 10.55 / 10.49 |
+| 120-step dream | 13.24 / 15.36 / 18.67 |
+| 120-step copy baseline | 12.92 / 14.25 / 14.41 |
+
+[`docs/racing-dream.mp4`](../docs/racing-dream.mp4) is the first 10-second
+real-vs-dream clip. The road, buildings and cars stay coherent, but the model
+does **not** beat a plain copy yet: replacing the action changes 38-53% of the
+codes but only 0.1-0.16 MAE of pixels, so the action barely affects the image.
+This is a working basic frame, not a finished racing world model.
+
+The reference's key next step is to **condition the renderer on the proxy** —
+the proxy fixes camera and motion while the model supplies appearance. That is
+the obvious next experiment here, along with more data and a larger model.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer
