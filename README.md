@@ -201,7 +201,9 @@ levels, score, hearts, a minimap, smaller sprites and simple sound effects.
 The original **pixel** path is still developed alongside it: a 32x32 VQVAE
 (K=512, D=64) now reconstructs a dungeon frame to **0.88 MAE**, and the
 transformer dream is in [`docs/pixel-dream.mp4`](docs/pixel-dream.mp4). The
-VQVAE is no longer the bottleneck; the transformer dynamics is.
+VQVAE is no longer the bottleneck; the transformer dynamics is. A
+[hybrid clip](docs/hybrid-dream.mp4) combines the pixel cave with exact entity
+state.
 
 ## Repository layout
 

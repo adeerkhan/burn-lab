@@ -1069,6 +1069,19 @@ More data made the model use the action more, but it did not improve
 long-horizon pixels. That rules out data volume as the main bottleneck and
 points at the dynamics objective and architecture.
 
+#### Hybrid: pixel cave plus exact entities
+
+The pixel dream is good at the cave, torch and lighting, but its small entities
+drift. The hybrid keeps the pixel-model frame for the world and composites the
+player, enemies, diamonds and exit from the observed state at their true
+positions (`scripts/hybrid_video.py`). The result is
+[`docs/hybrid-dream.mp4`](../docs/hybrid-dream.mp4): learned appearance for the
+cave, exact state for everything you interact with.
+
+This is the practical form of the state + pixel hybrid: each part does what it
+is good at. The next step is to replace the observed entity state with the
+learned state model, so the whole frame is generated.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer
