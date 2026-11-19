@@ -18,6 +18,9 @@ pub struct VqConfig {
     pub dim: usize,
     pub codes: usize,
     pub grid: usize,
+    /// Frame resolution (64 or 128).
+    #[serde(default = "default_size")]
+    pub size: usize,
     pub decay: f32,
 }
 
@@ -28,6 +31,7 @@ impl Default for VqConfig {
             dim: 32,
             codes: 64,
             grid: 16,
+            size: default_size(),
             decay: 0.99,
         }
     }
@@ -83,6 +87,10 @@ fn down(ch_in: usize, ch_out: usize, device: &Device) -> Conv2d {
         .init(device)
 }
 
+fn default_size() -> usize {
+    64
+}
+
 fn up(ch_in: usize, ch_out: usize, device: &Device) -> ConvTranspose2d {
     ConvTranspose2dConfig::new([ch_in, ch_out], [4, 4])
         .with_stride([2, 2])
@@ -95,7 +103,7 @@ impl VqVae {
         let c = config.channels;
         let d = config.dim;
         // 64x64 -> grid x grid needs log2(64/grid) stride-2 stages.
-        let levels = (64 / config.grid).ilog2() as usize;
+        let levels = (config.size / config.grid).ilog2() as usize;
         let mut encoder = vec![
             Conv2dConfig::new([c, d], [3, 3])
                 .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))

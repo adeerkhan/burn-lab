@@ -296,3 +296,9 @@ chase. Trained on 600 episodes with a longer run; the dream beats copy:
 
 Larger VQVAE (K=1024, D=96, 24k steps) and a hybrid clip with exact cars:
 [`docs/vice-hybrid.mp4`](docs/vice-hybrid.mp4).
+
+### Vice City at 128x128
+
+Doubled frame resolution, same-size cars, VICE CITY neon and a longer run;
+dream MAE improved to 25.6 / 30.0 / 29.0:
+[`docs/vice-city-128.mp4`](docs/vice-city-128.mp4).

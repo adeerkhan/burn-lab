@@ -24,6 +24,10 @@ fn default_tokens() -> usize {
     TOKENS
 }
 
+fn default_size() -> usize {
+    64
+}
+
 fn default_change_prior() -> f32 {
     -2.0
 }
@@ -40,6 +44,9 @@ pub struct WorldConfig {
     /// Tokens per frame: grid x grid (256 for 16x16, 1024 for 32x32).
     #[serde(default = "default_tokens")]
     pub tokens: usize,
+    /// Frame resolution, used by the pixel head.
+    #[serde(default = "default_size")]
+    pub size: usize,
     /// Initial logit bias against changing a token. Negative = copy.
     #[serde(default = "default_change_prior")]
     pub change_prior: f32,
@@ -58,6 +65,7 @@ impl Default for WorldConfig {
             heads: 4,
             context: 4,
             tokens: default_tokens(),
+            size: default_size(),
             change_prior: default_change_prior(),
             residual: false,
         }
@@ -164,7 +172,7 @@ impl WorldModel {
         let dim = config.dim;
         let codes = config.codes;
         let grid = (config.tokens as f64).sqrt().round() as usize;
-        let patch = 64 / grid.max(1);
+        let patch = config.size / grid.max(1);
         let blocks = (0..config.layers)
             .map(|_| {
                 (
@@ -281,13 +289,13 @@ impl WorldModel {
             .add(self.change_prior.val().reshape([1, 1, 1]))
             .reshape([batch, frames, tokens, 1]);
         let grid = (self.config.tokens as f64).sqrt().round() as usize;
-        let patch = 64 / grid.max(1);
+        let patch = self.config.size / grid.max(1);
         let pixel = self
             .pixel_head
             .forward(h)
             .reshape([batch * frames, grid, grid, 3, patch, patch])
             .permute([0, 3, 1, 4, 2, 5])
-            .reshape([batch, frames, 3, 64, 64])
+            .reshape([batch, frames, 3, self.config.size, self.config.size])
             .tanh();
         (logits, change, pixel)
     }
@@ -368,7 +376,9 @@ impl WorldModel {
             new_codes.reshape([batch, tokens]),
             Tensor::<2>::from_data(TensorData::new(change_probs, [batch, tokens]), &device),
             confidence.reshape([batch, tokens]),
-            pixel.narrow(1, frames, 1).reshape([batch, 3, 64, 64]),
+            pixel
+                .narrow(1, frames, 1)
+                .reshape([batch, 3, self.config.size, self.config.size]),
         )
     }
 
@@ -484,6 +494,7 @@ mod tests {
         let device = Device::flex();
         let config = WorldConfig {
             codes: 16,
+            size: 64,
             dim: 32,
             layers: 1,
             heads: 4,
@@ -509,7 +520,7 @@ mod tests {
         let (logits, change, pixel) = model.forward_full(seq.clone(), actions.clone());
         assert_eq!(logits.dims(), [2, 3, tokens, 16]);
         assert_eq!(change.dims(), [2, 3, tokens, 1]);
-        assert_eq!(pixel.dims(), [2, 3, 3, 64, 64]);
+        assert_eq!(pixel.dims(), [2, 3, 3, config.size, config.size]);
         assert_eq!(model.predict(seq, actions).dims(), [2, tokens]);
     }
 }

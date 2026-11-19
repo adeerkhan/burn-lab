@@ -172,6 +172,7 @@ struct Options {
     contrastive_margin: f32,
     pixel_loss: f32,
     pixel_scale: f32,
+    size: usize,
 }
 
 impl Default for Options {
@@ -228,6 +229,7 @@ impl Default for Options {
             contrastive_margin: 1.0,
             pixel_loss: 0.0,
             pixel_scale: 0.0,
+            size: 64,
         }
     }
 }
@@ -307,6 +309,7 @@ impl Options {
                 }
                 "--pixel-loss" => options.pixel_loss = value().parse().expect("pixel loss"),
                 "--pixel-scale" => options.pixel_scale = value().parse().expect("pixel scale"),
+                "--size" => options.size = value().parse().expect("frame size"),
                 "--world-noise" => options.world_noise = value().parse().expect("world noise"),
                 "--clean-p" => options.clean_p = value().parse().expect("clean probability"),
                 "--attention" => {
@@ -599,22 +602,28 @@ fn cross_entropy(logits: Tensor<2>, labels: &Tensor<2, Int>, _device: &Device) -
 }
 
 /// Stream one frame by episode and time index; no dataset is held in memory.
-fn world_frame_at(path: &str, episode: usize, time: usize, device: &Device) -> Tensor<4> {
+fn world_frame_at(
+    path: &str,
+    episode: usize,
+    time: usize,
+    device: &Device,
+    size: usize,
+) -> Tensor<4> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path).expect("open the frame file");
     let index = episode * 129 + time;
-    let mut raw = vec![0u8; 3 * 64 * 64];
-    file.seek(SeekFrom::Start((index * 3 * 64 * 64) as u64))
+    let mut raw = vec![0u8; 3 * size * size];
+    file.seek(SeekFrom::Start((index * 3 * size * size) as u64))
         .expect("seek frames");
     file.read_exact(&mut raw).expect("read frame");
     let mut pixels = Vec::with_capacity(raw.len());
-    let plane = 64 * 64;
+    let plane = size * size;
     for channel in 0..3 {
         for pixel in 0..plane {
             pixels.push(raw[3 * pixel + channel] as f32 / 127.5 - 1.0);
         }
     }
-    Tensor::<4>::from_data(TensorData::new(pixels, [1, 3, 64, 64]), device)
+    Tensor::<4>::from_data(TensorData::new(pixels, [1, 3, size, size]), device)
 }
 
 /// Tokenizer training: L1+MSE reconstruction and an edge loss, with an EMA
@@ -631,7 +640,7 @@ fn train_world_vq(options: &Options) {
     let episodes = (std::fs::metadata(format!("{prefix}/frames.bin"))
         .expect("frame file")
         .len() as usize
-        / (3 * 64 * 64 * steps_per_episode))
+        / (3 * options.size * options.size * steps_per_episode))
         .max(1);
     let frames = episodes * steps_per_episode;
     let config = VqConfig {
@@ -642,6 +651,7 @@ fn train_world_vq(options: &Options) {
             64
         },
         grid: options.grid,
+        size: options.size,
         ..VqConfig::default()
     };
     let mut model = VqVae::new(&config, &device);
@@ -656,7 +666,13 @@ fn train_world_vq(options: &Options) {
         let mut rng = diffusion::data::Rng::new(options.seed + step as u64);
         let episode = rng.below(episodes.saturating_sub(10).max(1));
         let time = rng.below(128);
-        let x = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
+        let x = world_frame_at(
+            &format!("{prefix}/frames.bin"),
+            episode,
+            time,
+            &device,
+            options.size,
+        );
         let (recon, _, commit) = model.forward(x.clone());
         let error = x.clone().sub(recon.clone());
         let rec = error
@@ -719,14 +735,20 @@ fn encode_world_tokens(options: &Options) {
     let episodes = (std::fs::metadata(format!("{prefix}/frames.bin"))
         .expect("frame file")
         .len() as usize
-        / (3 * 64 * 64 * steps))
+        / (3 * options.size * options.size * steps))
         .max(1);
     let mut file =
         std::fs::File::create(format!("{prefix}/tokens.bin")).expect("create token file");
     let started = std::time::Instant::now();
     for episode in 0..episodes {
         for time in 0..steps {
-            let x = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
+            let x = world_frame_at(
+                &format!("{prefix}/frames.bin"),
+                episode,
+                time,
+                &device,
+                options.size,
+            );
             let ids = model.ids(model.encode(x));
             let values = ids
                 .into_data()
@@ -771,6 +793,7 @@ fn train_world_model(options: &Options) {
     .expect("parse tokenizer config");
     let config = WorldConfig {
         codes: tokenizer_config.codes,
+        size: tokenizer_config.size,
         dim: options.dim.min(128),
         layers: options.depth.min(4),
         heads: options.heads.min(8),
@@ -805,6 +828,7 @@ fn train_world_model(options: &Options) {
                     tokens: config.tokens,
                     grid: tokenizer_config.grid,
                     frames_path: &format!("{prefix}/frames.bin"),
+                    size: options.size,
                 },
                 &device,
             );
@@ -990,6 +1014,7 @@ fn world_ceiling(options: &Options) {
                 episode,
                 time - context + slot,
                 &device,
+                options.size,
             );
             ids.push(vq.ids(vq.encode(frame)).reshape([tokens]));
         }
@@ -1015,8 +1040,20 @@ fn world_ceiling(options: &Options) {
         );
         let acts = Tensor::<2, Int>::from_data(TensorData::new(acts, [1, context]), &device);
         let (new_ids, probs, pixel) = wm.predict_multipass_pixels(seq, acts, options.passes);
-        let real = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
-        let previous = world_frame_at(&format!("{prefix}/frames.bin"), episode, time - 1, &device);
+        let real = world_frame_at(
+            &format!("{prefix}/frames.bin"),
+            episode,
+            time,
+            &device,
+            options.size,
+        );
+        let previous = world_frame_at(
+            &format!("{prefix}/frames.bin"),
+            episode,
+            time - 1,
+            &device,
+            options.size,
+        );
         let dream = decode_world_prediction(
             &vq,
             &wm,
@@ -1157,7 +1194,13 @@ fn dream_rollout(options: &Options) {
     let mut history: Vec<Tensor<1, Int>> = Vec::new();
     let mut actions: Vec<i64> = Vec::new();
     for time in 0..context {
-        let frame = world_frame_at(&format!("{prefix}/frames.bin"), 0, time, &device);
+        let frame = world_frame_at(
+            &format!("{prefix}/frames.bin"),
+            0,
+            time,
+            &device,
+            options.size,
+        );
         let ids = vq.ids(vq.encode(frame)).reshape([tokens]);
         history.push(ids);
         if time > 0 {
@@ -1165,7 +1208,13 @@ fn dream_rollout(options: &Options) {
         }
     }
     let mut errors = Vec::new();
-    let mut last_pixels = world_frame_at(&format!("{prefix}/frames.bin"), 0, context - 1, &device);
+    let mut last_pixels = world_frame_at(
+        &format!("{prefix}/frames.bin"),
+        0,
+        context - 1,
+        &device,
+        options.size,
+    );
     for step in 0..steps {
         let action = recorded[context + step - 1] as i64;
         actions.push(action);
@@ -1216,8 +1265,13 @@ fn dream_rollout(options: &Options) {
         };
         last_pixels = dream.clone();
 
-        let real_frame =
-            world_frame_at(&format!("{prefix}/frames.bin"), 0, context + step, &device);
+        let real_frame = world_frame_at(
+            &format!("{prefix}/frames.bin"),
+            0,
+            context + step,
+            &device,
+            options.size,
+        );
         let error = display
             .clone()
             .sub(real_frame.clone())
@@ -1316,6 +1370,7 @@ fn world_action(options: &Options) {
                 episode,
                 time - context + slot,
                 &device,
+                options.size,
             );
             ids.push(vq.ids(vq.encode(frame)).reshape([tokens]));
         }
@@ -1339,8 +1394,20 @@ fn world_action(options: &Options) {
             acts.push(recorded[episode * 128 + time - context + slot - 1] as i64);
         }
         let true_action = acts[context - 1] as usize;
-        let previous = world_frame_at(&format!("{prefix}/frames.bin"), episode, time - 1, &device);
-        let real = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
+        let previous = world_frame_at(
+            &format!("{prefix}/frames.bin"),
+            episode,
+            time - 1,
+            &device,
+            options.size,
+        );
+        let real = world_frame_at(
+            &format!("{prefix}/frames.bin"),
+            episode,
+            time,
+            &device,
+            options.size,
+        );
         let predict = |acts: &[i64]| -> (Tensor<2, Int>, Tensor<2>, Tensor<4>) {
             let tensor = Tensor::<2, Int>::from_data(
                 TensorData::new(acts.to_vec(), [1, acts.len()]),
@@ -1459,7 +1526,7 @@ fn train_detail(options: &Options) {
     let episodes = (std::fs::metadata(format!("{prefix}/frames.bin"))
         .expect("frame file")
         .len() as usize
-        / (3 * 64 * 64 * steps_per_episode))
+        / (3 * options.size * options.size * steps_per_episode))
         .max(1);
     let mut model = DetailNet::new(32, &device);
     let mut optimizer = AdamWConfig::new().init();
@@ -1469,7 +1536,13 @@ fn train_detail(options: &Options) {
         let mut rng = diffusion::data::Rng::new(options.seed + step as u64);
         let episode = rng.below(episodes.saturating_sub(10).max(1));
         let time = rng.below(steps_per_episode - 1);
-        let real = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
+        let real = world_frame_at(
+            &format!("{prefix}/frames.bin"),
+            episode,
+            time,
+            &device,
+            options.size,
+        );
         let ids = vq.ids(vq.encode(real.clone()));
         let recon = vq.decode_ids(ids);
         let out = model.forward(recon);
@@ -1511,15 +1584,15 @@ fn frame_to_rgb_u8(frame: Tensor<4>) -> Vec<u8> {
 }
 
 /// Interleaved RGB u8 back to a `[1, 3, 64, 64]` tensor in [-1, 1].
-fn rgb_u8_to_frame(bytes: &[u8], device: &Device) -> Tensor<4> {
-    let plane = 64 * 64;
+fn rgb_u8_to_frame(bytes: &[u8], device: &Device, size: usize) -> Tensor<4> {
+    let plane = size * size;
     let mut values = Vec::with_capacity(3 * plane);
     for channel in 0..3 {
         for pixel in 0..plane {
             values.push(bytes[3 * pixel + channel] as f32 / 127.5 - 1.0);
         }
     }
-    Tensor::<4>::from_data(TensorData::new(values, [1, 3, 64, 64]), device)
+    Tensor::<4>::from_data(TensorData::new(values, [1, 3, size, size]), device)
 }
 
 struct PlayPredict<'a> {
@@ -1634,9 +1707,21 @@ fn world_play(options: &Options) {
     let recorded = std::fs::read(format!("{prefix}/actions.bin")).expect("read actions");
     let mut history: Vec<Tensor<1, Int>> = Vec::new();
     let mut actions: Vec<i64> = Vec::new();
-    let mut anchor = world_frame_at(&format!("{prefix}/frames.bin"), 0, context - 1, &device);
+    let mut anchor = world_frame_at(
+        &format!("{prefix}/frames.bin"),
+        0,
+        context - 1,
+        &device,
+        options.size,
+    );
     for time in 0..context {
-        let frame = world_frame_at(&format!("{prefix}/frames.bin"), 0, time, &device);
+        let frame = world_frame_at(
+            &format!("{prefix}/frames.bin"),
+            0,
+            time,
+            &device,
+            options.size,
+        );
         history.push(vq.ids(vq.encode(frame)).reshape([tokens]));
         if time > 0 {
             actions.push(recorded[time - 1] as i64);
@@ -1657,12 +1742,12 @@ fn world_play(options: &Options) {
             Some("q") | None => break,
             Some("s") => {
                 let count: usize = parts.get(1).unwrap_or(&"0").parse().unwrap_or(0);
-                let mut record = vec![0u8; 1 + 3 * 64 * 64];
+                let mut record = vec![0u8; 1 + 3 * options.size * options.size];
                 history.clear();
                 actions.clear();
                 for index in 0..count {
                     reader.read_exact(&mut record).expect("read sync frame");
-                    let frame = rgb_u8_to_frame(&record[1..], &device);
+                    let frame = rgb_u8_to_frame(&record[1..], &device, options.size);
                     if index + 1 == count {
                         anchor = frame.clone();
                     }
@@ -1723,6 +1808,7 @@ struct WorldBatchArgs<'a> {
     tokens: usize,
     grid: usize,
     frames_path: &'a str,
+    size: usize,
 }
 
 type WorldBatch = (
@@ -1747,8 +1833,8 @@ fn world_batch(args: WorldBatchArgs<'_>, device: &Device) -> WorldBatch {
     let mut targets = Vec::with_capacity(args.batch * frames * tokens);
     let mut copy = Vec::with_capacity(args.batch * frames * tokens);
     let mut weights = Vec::with_capacity(args.batch * frames * tokens);
-    let mut target_pixels = Vec::with_capacity(args.batch * frames * 3 * 64 * 64);
-    let mut previous_pixels = Vec::with_capacity(args.batch * frames * 3 * 64 * 64);
+    let mut target_pixels = Vec::with_capacity(args.batch * frames * 3 * args.size * args.size);
+    let mut previous_pixels = Vec::with_capacity(args.batch * frames * 3 * args.size * args.size);
     let mut frames_file = std::fs::File::open(args.frames_path).expect("open frames");
 
     for _ in 0..args.batch {
@@ -1762,26 +1848,28 @@ fn world_batch(args: WorldBatchArgs<'_>, device: &Device) -> WorldBatch {
                 .seek(SeekFrom::Start((index * tokens * 8) as u64))
                 .expect("seek tokens");
             tokens_file.read_exact(&mut raw).expect("read tokens");
-            let mut frame = vec![0u8; 3 * 64 * 64];
+            let mut frame = vec![0u8; 3 * args.size * args.size];
             frames_file
-                .seek(SeekFrom::Start((index * 3 * 64 * 64) as u64))
+                .seek(SeekFrom::Start((index * 3 * args.size * args.size) as u64))
                 .expect("seek frame");
             frames_file.read_exact(&mut frame).expect("read frame");
-            let mut prev_raw = vec![0u8; 3 * 64 * 64];
+            let mut prev_raw = vec![0u8; 3 * args.size * args.size];
             let prev_index = index.saturating_sub(1);
             frames_file
-                .seek(SeekFrom::Start((prev_index * 3 * 64 * 64) as u64))
+                .seek(SeekFrom::Start(
+                    (prev_index * 3 * args.size * args.size) as u64,
+                ))
                 .expect("seek previous frame");
             frames_file
                 .read_exact(&mut prev_raw)
                 .expect("read previous frame");
             for channel in 0..3 {
-                for pixel in 0..64 * 64 {
+                for pixel in 0..args.size * args.size {
                     target_pixels.push(frame[3 * pixel + channel] as f32 / 127.5 - 1.0);
                     previous_pixels.push(prev_raw[3 * pixel + channel] as f32 / 127.5 - 1.0);
                 }
             }
-            let patch = (64 / args.grid).max(1);
+            let patch = (args.size / args.grid).max(1);
             for ty in 0..args.grid {
                 for tx in 0..args.grid {
                     let mut entity = false;
@@ -1872,11 +1960,14 @@ fn world_batch(args: WorldBatchArgs<'_>, device: &Device) -> WorldBatch {
             device,
         ),
         Tensor::<5>::from_data(
-            TensorData::new(target_pixels, [args.batch, frames, 3, 64, 64]),
+            TensorData::new(target_pixels, [args.batch, frames, 3, args.size, args.size]),
             device,
         ),
         Tensor::<5>::from_data(
-            TensorData::new(previous_pixels, [args.batch, frames, 3, 64, 64]),
+            TensorData::new(
+                previous_pixels,
+                [args.batch, frames, 3, args.size, args.size],
+            ),
             device,
         ),
     )

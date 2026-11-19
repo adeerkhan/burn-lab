@@ -14,9 +14,11 @@ import json
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 SIZE = 64
+S = 2
+OUT = SIZE * S
 HORIZON = 12
 ROAD = (58, 60, 66)
 SIDEWALK = (105, 100, 105)
@@ -29,6 +31,41 @@ NEON = [(255, 90, 190), (90, 230, 255), (255, 200, 70), (150, 255, 130)]
 FLASH_RED = (255, 60, 60)
 FLASH_BLUE = (70, 150, 255)
 ACTIONS = ["stay", "left", "right", "accelerate", "brake"]
+
+
+class ScaledDraw:
+    """Draw in the old 64x64 coordinate space onto a 128x128 image."""
+
+    def __init__(self, image):
+        self.image = image
+        self.draw = ImageDraw.Draw(image)
+        try:
+            self.font = ImageFont.truetype(
+                "/usr/share/fonts/liberation-sans-fonts/LiberationSans-Bold.ttf", 8 * S)
+        except Exception:
+            self.font = ImageFont.load_default()
+
+    def _box(self, box):
+        return tuple(int(v * S) for v in box)
+
+    def _points(self, points):
+        return [(int(x * S), int(y * S)) for x, y in points]
+
+    def rectangle(self, box, **kwargs):
+        self.draw.rectangle(self._box(box), **kwargs)
+
+    def polygon(self, xy, **kwargs):
+        self.draw.polygon(self._points(xy), **kwargs)
+
+    def line(self, xy, **kwargs):
+        self.draw.line(self._points(xy), **kwargs)
+
+    def ellipse(self, box, **kwargs):
+        self.draw.ellipse(self._box(box), **kwargs)
+
+    def text(self, xy, text, **kwargs):
+        kwargs.setdefault("font", self.font)
+        self.draw.text((int(xy[0] * S), int(xy[1] * S)), text, **kwargs)
 
 
 class ViceWorld:
@@ -154,9 +191,9 @@ class ViceWorld:
                     if seed % 4 == 0 and depth > 0.2:
                         neon = NEON[(i + self.seed) % len(NEON)]
                         ny = top + 4 + (seed % 3) * 6
-                        if ny + 2 < box[3]:
-                            draw.rectangle((box[0] + 1, ny, box[2] - 1, ny + 2), fill=neon)
-                            draw.rectangle((box[0] + 2, ny + 1, box[2] - 2, ny + 1), fill=(30, 25, 40))
+                        if ny + 4 < box[3] and box[2] - box[0] > 9:
+                            draw.rectangle((box[0] + 1, ny, box[2] - 1, ny + 4), fill=(35, 25, 45))
+                            draw.text((box[0] + 2, ny), "VICE CITY", fill=neon)
                     if depth > 0.5 and seed % 3 == 0:
                         draw.line([(box[0] + 2, top), (box[0] + 2, top - 3)], fill=(60, 60, 65))
 
@@ -200,22 +237,22 @@ class ViceWorld:
 
     def _player(self, draw, proxy: bool) -> None:
         x = self.road_centre(49) + self.turn_direction * self.turn_phase * 3
-        self._car(draw, x, 49, 7, 10, (235, 70, 60), False, proxy)
+        self._car(draw, x, 49, 6, 8, (235, 70, 60), False, proxy)
 
     def _police(self, draw, proxy: bool) -> None:
         for index, gap in enumerate(self.police):
             depth = float(np.clip(1.0 - gap / 16.0, 0.02, 0.95))
             y = int(63 - depth * 6)
-            width = max(2, int(2 + depth * 4))
-            height = max(2, int(2 + depth * 5))
+            width = max(4, int(4 + depth * 2))
+            height = max(5, int(5 + depth * 3))
             lane = -1 if index % 2 == 0 else 1
             x = self.road_centre(y) + lane * (width + 3) + (index // 2) * 2
             self._car(draw, x, y, width, height, (45, 75, 185), True, proxy,
                       (self.time + index) % 8 < 4)
 
     def render(self, proxy: bool = False) -> np.ndarray:
-        image = Image.new("RGB", (SIZE, SIZE))
-        draw = ImageDraw.Draw(image)
+        image = Image.new("RGB", (OUT, OUT))
+        draw = ScaledDraw(image)
         self._sky(draw, proxy)
         self._road(draw, proxy)
         self._buildings(draw, proxy)
@@ -250,17 +287,17 @@ def main() -> None:
     if args.preview:
         world = ViceWorld(7)
         walk = policy(world, np.random.default_rng(8))
-        strip = Image.new("RGB", (8 * SIZE * 3, SIZE * 3))
+        strip = Image.new("RGB", (8 * OUT, OUT))
         for t in range(8):
-            strip.paste(Image.fromarray(world.render()).resize((SIZE * 3, SIZE * 3), Image.NEAREST),
-                        (t * SIZE * 3, 0))
+            strip.paste(Image.fromarray(world.render()),
+                        (t * OUT, 0))
             for _ in range(18):
                 world.step(next(walk))
         strip.save("/tmp/opencode/vice-preview.png")
         print("wrote preview")
         return
     args.out.mkdir(parents=True, exist_ok=True)
-    frames = np.empty((args.episodes, args.steps + 1, SIZE, SIZE, 3), dtype=np.uint8)
+    frames = np.empty((args.episodes, args.steps + 1, OUT, OUT, 3), dtype=np.uint8)
     proxies = np.empty_like(frames)
     actions = np.empty((args.episodes, args.steps), dtype=np.uint8)
     for episode in range(args.episodes):
@@ -280,7 +317,7 @@ def main() -> None:
     (args.out / "proxy.bin").write_bytes(np.ascontiguousarray(proxies).reshape(-1).tobytes())
     (args.out / "actions.bin").write_bytes(np.ascontiguousarray(actions).tobytes())
     (args.out / "meta.json").write_text(json.dumps({
-        "episodes": args.episodes, "steps": args.steps, "size": SIZE, "actions": ACTIONS,
+        "episodes": args.episodes, "steps": args.steps, "size": OUT, "actions": ACTIONS,
     }))
     print(f"wrote {args.out}")
 

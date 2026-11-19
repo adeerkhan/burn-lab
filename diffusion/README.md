@@ -1245,6 +1245,31 @@ the sunset from the known renderer back onto the dream. The result is
 [`docs/vice-hybrid.mp4`](../docs/vice-hybrid.mp4): the world model provides the
 city and lighting, while the cars are exact and never collide.
 
+#### Vice City at 128x128
+
+The frame was doubled to **128x128**. A scaled renderer keeps the same scene
+coordinates, the player car is now the same size as the police, and neon
+"VICE CITY" signs are drawn on the facades. The Rust pipeline gained a `size`
+field in the VQVAE and world-model configs and a `--size` flag on every command
+that reads frames; all frame strides and tensor shapes follow it.
+
+Trained on 400 episodes with a 16k-step VQVAE (K=1024, D=64, 32x32 codes) and
+a 12k-step transformer.
+
+| Vice City 128 | Value |
+| --- | ---: |
+| One-step: model / copy | ? |
+| 120-step dream | 25.57 / 29.98 / 28.96 |
+
+The doubled resolution gives visibly smoother road, buildings and signs. It
+also improved the dream over the 64x64 version (37.91 late -> 28.96). The
+decoded cars are still soft, so `vice_hybrid.py` remains useful for exact cars.
+
+[`docs/vice-city-128.mp4`](../docs/vice-city-128.mp4) is the clip.
+
+The VQ library suggests cosine similarity, lower-dimensional codebooks and
+residual quantization for better code usage; those are the next tokenizer ideas.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer
