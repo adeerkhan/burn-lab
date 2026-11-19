@@ -1226,6 +1226,25 @@ remaining gap is the renderer and the proxy conditioning.
 
 [`docs/vice-city.mp4`](../docs/vice-city.mp4) is the clip.
 
+#### Vice City 2: bigger VQVAE and exact cars
+
+The police cars used to overlap the player and each other. The engine now
+keeps a minimum gap and puts them in separate lanes behind the player. The
+VQVAE was enlarged to K=1024, D=96 and trained 24k steps; the transformer ran
+16k steps on 600 episodes.
+
+| Vice City 2 | Value |
+| --- | ---: |
+| VQVAE ceiling | **2.74 MAE** (was 3.30) |
+| One-step: model / copy | 28.50 / 28.72 |
+| 120-step dream | 31.18 / 36.25 / **37.91** (was 39.44) |
+
+A larger codebook improves reconstruction and the dream. The decoded cars are
+still soft, so `scripts/vice_hybrid.py` composites the exact car sprites and
+the sunset from the known renderer back onto the dream. The result is
+[`docs/vice-hybrid.mp4`](../docs/vice-hybrid.mp4): the world model provides the
+city and lighting, while the cars are exact and never collide.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer

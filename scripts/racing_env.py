@@ -58,9 +58,9 @@ class ViceWorld:
         self.time += 1
         self.intersection = (self.distance % 34) < 1.6
         for index, gap in enumerate(self.police):
-            target = 1.0 + (self.speed - 1.0) * 3.5 + abs(self.turn_direction) * self.turn_phase
-            target += index * 2.0 + self.rng.normal(0, 0.08)
-            target = float(np.clip(target, 0.7, 16.0))
+            target = 2.4 + (self.speed - 1.0) * 3.0 + abs(self.turn_direction) * self.turn_phase
+            target += index * 2.6 + self.rng.normal(0, 0.05)
+            target = float(np.clip(target, 1.8, 16.0))
             self.police[index] = gap * 0.78 + target * 0.22
 
     def _vanish(self) -> float:
@@ -205,10 +205,11 @@ class ViceWorld:
     def _police(self, draw, proxy: bool) -> None:
         for index, gap in enumerate(self.police):
             depth = float(np.clip(1.0 - gap / 16.0, 0.02, 0.95))
-            y = int(61 - depth * 8)
-            width = max(2, int(2 + depth * 5))
-            height = max(2, int(2 + depth * 6))
-            x = self.road_centre(y) + (index - 0.5) * (width + 4)
+            y = int(63 - depth * 6)
+            width = max(2, int(2 + depth * 4))
+            height = max(2, int(2 + depth * 5))
+            lane = -1 if index % 2 == 0 else 1
+            x = self.road_centre(y) + lane * (width + 3) + (index // 2) * 2
             self._car(draw, x, y, width, height, (45, 75, 185), True, proxy,
                       (self.time + index) % 8 < 4)
 

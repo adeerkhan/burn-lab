@@ -291,3 +291,8 @@ corners and police approaching smoothly from behind. Clip:
 A sunset boulevard with palms, neon signs, varied tall towers and a police
 chase. Trained on 600 episodes with a longer run; the dream beats copy:
 [`docs/vice-city.mp4`](docs/vice-city.mp4).
+
+### Vice City 2
+
+Larger VQVAE (K=1024, D=96, 24k steps) and a hybrid clip with exact cars:
+[`docs/vice-hybrid.mp4`](docs/vice-hybrid.mp4).
