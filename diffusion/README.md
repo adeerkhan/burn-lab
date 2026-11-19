@@ -1053,6 +1053,22 @@ representation is no longer the problem — closing the gap now requires a
 larger/longer-trained transformer or a better dynamics objective, not a new
 VQVAE.
 
+#### Data and epochs
+
+A second run used **600 episodes** (twice the data) and 16,000 steps at batch 4
+(~0.8 epochs of the larger set). The action sensitivity improved — replacing
+the action changed 29-38% of codes (against 15-29% on 300 episodes) and
+0.46-0.64 MAE of pixels — but the dream did not:
+
+| Run | One-step | Dream 1-10 / 11-30 / 31+ |
+| --- | ---: | --- |
+| 300 episodes, 12k steps | 3.19 | 9.13 / 7.71 / 10.88 |
+| 600 episodes, 16k steps | 3.17 | 9.36 / 8.91 / 12.42 |
+
+More data made the model use the action more, but it did not improve
+long-horizon pixels. That rules out data volume as the main bottleneck and
+points at the dynamics objective and architecture.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer
