@@ -1164,6 +1164,27 @@ steps. This is the correct starting point, not the finished renderer.
 [`docs/first-person-city.mp4`](../docs/first-person-city.mp4) is the 10-second
 real-vs-dream clip.
 
+#### Third-person chase
+
+The camera now follows **behind** the player's car. Both cars are drawn in
+detail: the red car has a roof, rear window, twin tail-lights, wheels and a
+shadow; police cars have a blue body, a red/blue light bar, headlights and a
+shadow, and close in when the player brakes or takes a bend. Buildings are
+taller and more varied, with rows of lit windows, a darker distant skyline at
+the vanishing point and a warm sky, so the street reads as Manhattan-like.
+
+| Third-person chase | Value |
+| --- | ---: |
+| VQVAE ceiling | 3.20 MAE |
+| One-step: model / copy | 19.54 / 19.26 |
+| 120-step dream | 20.67 / 35.38 / 38.56 |
+| 120-step copy | 18.71 / 34.68 / 31.39 |
+
+The view and the chase are right; the model is still close to copy and loses
+late. Action substitution changes 16-29% of codes and 0.3-0.6 MAE of pixels.
+
+[`docs/third-person-chase.mp4`](../docs/third-person-chase.mp4) is the clip.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer

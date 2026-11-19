@@ -273,3 +273,9 @@ towers on both sides, roads that bend at intersections, and police chasing in
 a rear-view mirror. The first VQVAE + transformer dream is in
 [`docs/first-person-city.mp4`](docs/first-person-city.mp4); the view is correct
 but the model still loses to a copy baseline.
+
+### Third-person police chase
+
+A third-person city chase with a detailed red player car, blue police cars with
+flashing light bars, tall Manhattan-style blocks and a distant skyline. First
+dream: [`docs/third-person-chase.mp4`](docs/third-person-chase.mp4).
