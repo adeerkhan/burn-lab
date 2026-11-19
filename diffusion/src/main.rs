@@ -167,6 +167,9 @@ struct Options {
     change_prior: f32,
     gate_boost: f32,
     lr: f32,
+    contrastive: bool,
+    contrastive_weight: f32,
+    contrastive_margin: f32,
 }
 
 impl Default for Options {
@@ -218,6 +221,9 @@ impl Default for Options {
             change_prior: -2.0,
             gate_boost: 1.0,
             lr: 1e-3,
+            contrastive: false,
+            contrastive_weight: 0.5,
+            contrastive_margin: 1.0,
         }
     }
 }
@@ -288,6 +294,13 @@ impl Options {
                 "--change-prior" => options.change_prior = value().parse().expect("change prior"),
                 "--gate-boost" => options.gate_boost = value().parse().expect("gate boost"),
                 "--lr" => options.lr = value().parse().expect("learning rate"),
+                "--contrastive" => options.contrastive = true,
+                "--contrastive-weight" => {
+                    options.contrastive_weight = value().parse().expect("contrastive weight")
+                }
+                "--contrastive-margin" => {
+                    options.contrastive_margin = value().parse().expect("contrastive margin")
+                }
                 "--world-noise" => options.world_noise = value().parse().expect("world noise"),
                 "--clean-p" => options.clean_p = value().parse().expect("clean probability"),
                 "--attention" => {
@@ -768,6 +781,7 @@ fn train_world_model(options: &Options) {
         config.dim, config.layers, config.heads, total
     );
 
+    let mut contrastive_rng = diffusion::data::Rng::new(options.seed ^ 0x9e37_79b9);
     let started = std::time::Instant::now();
     for step in 1..=options.steps {
         let (seq, actions, targets, copy_source, weights) = world_batch(
@@ -787,7 +801,7 @@ fn train_world_model(options: &Options) {
             },
             &device,
         );
-        let (logits, change_logits) = model.forward_full(seq, actions);
+        let (logits, change_logits) = model.forward_full(seq.clone(), actions.clone());
         let [batch, frames, tokens, codes] = logits.dims();
         let flat = logits.reshape([batch * frames * tokens, codes]);
         let target = targets.reshape([batch * frames * tokens]);
@@ -795,6 +809,11 @@ fn train_world_model(options: &Options) {
             .gather(1, target.clone().reshape([-1, 1]))
             .mul_scalar(-1.0)
             .reshape([batch * frames * tokens]);
+        let ce_target = ce
+            .clone()
+            .reshape([batch, frames, tokens])
+            .narrow(1, frames - 1, 1)
+            .mean();
         let loss = if config.residual {
             // Cross-entropy only on tokens that really changed, plus a Brier
             // score on the change flag. The copy source is the clean previous
@@ -837,6 +856,45 @@ fn train_world_model(options: &Options) {
                 .mean()
                 .div(weights.mean().clamp_min(1e-6))
         };
+        let mut loss = loss;
+        if options.contrastive {
+            // The wrong action must predict the target worse than the true
+            // action: relu(margin - (ce_alt - ce_true)). This is what stops
+            // the model from inferring the action from context and ignoring
+            // the explicit action input.
+            let mut acts = actions
+                .into_data()
+                .convert::<i64>()
+                .try_to_vec::<i64>()
+                .unwrap();
+            for item in 0..batch {
+                let index = item * frames + frames - 1;
+                let true_action = acts[index];
+                let mut alternative = contrastive_rng.below(5) as i64;
+                if alternative == true_action {
+                    alternative = (alternative + 1) % 5;
+                }
+                acts[index] = alternative;
+            }
+            let alt_actions =
+                Tensor::<2, Int>::from_data(TensorData::new(acts, [batch, frames]), &device);
+            let (alt_logits, _) = model.forward_full(seq, alt_actions);
+            let alt_ce = burn::tensor::activation::log_softmax(
+                alt_logits.reshape([batch * frames * tokens, codes]),
+                1,
+            )
+            .gather(1, target.reshape([-1, 1]))
+            .mul_scalar(-1.0)
+            .reshape([batch, frames, tokens])
+            .narrow(1, frames - 1, 1)
+            .mean();
+            let margin = alt_ce
+                .sub(ce_target)
+                .neg()
+                .add_scalar(options.contrastive_margin)
+                .clamp_min(0.0);
+            loss = loss.add(margin.mul_scalar(options.contrastive_weight));
+        }
         let value = loss.clone().into_scalar::<f32>();
         let grads = GradientsParams::from_grads(loss.backward(), &model);
         model = optimizer.step(options.lr as f64, model, grads);
