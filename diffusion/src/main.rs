@@ -917,12 +917,11 @@ fn world_ceiling(options: &Options) {
                 &device,
             );
             ids.push(vq.ids(vq.encode(frame)).reshape([tokens]));
-            // One action per context frame; the oldest has no known action.
-            if slot == 0 {
-                acts.push(5); // NO_ACTION
-            } else {
-                acts.push(recorded[episode * 128 + time - context + slot - 1] as i64);
-            }
+        }
+        // One action per frame after the oldest; the last one is the action
+        // that produces the target frame. predict_pass prepends NO_ACTION.
+        for slot in 1..=context {
+            acts.push(recorded[episode * 128 + time - context + slot - 1] as i64);
         }
         let seq = Tensor::<3, Int>::from_data(
             TensorData::new(
