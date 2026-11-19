@@ -255,5 +255,6 @@ A second world model, inspired by inclusionAI/CodeWorldModel: a pseudo-3D road
 with side buildings, a player car and chasing police. It records both a pixel
 frame and a wireframe proxy, so a renderer can be conditioned on structure
 later. The first VQVAE + transformer dream is in
-[`docs/racing-dream.mp4`](docs/racing-dream.mp4); the frame works, but the model
-does not yet beat a copy baseline.
+[`docs/racing-dream.mp4`](docs/racing-dream.mp4); the frame works; the city version adds turns,
+detailed cars and a reactive police chase but the model still does not beat a
+copy baseline. See [`docs/racing-city.mp4`](docs/racing-city.mp4).

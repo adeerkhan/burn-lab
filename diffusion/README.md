@@ -1099,15 +1099,21 @@ recorded as flat u8 files (frames, proxy, actions).
 | 120-step dream | 13.24 / 15.36 / 18.67 |
 | 120-step copy baseline | 12.92 / 14.25 / 14.41 |
 
-[`docs/racing-dream.mp4`](../docs/racing-dream.mp4) is the first 10-second
-real-vs-dream clip. The road, buildings and cars stay coherent, but the model
-does **not** beat a plain copy yet: replacing the action changes 38-53% of the
-codes but only 0.1-0.16 MAE of pixels, so the action barely affects the image.
-This is a working basic frame, not a finished racing world model.
+The city version adds turning roads, taller buildings with windows, cars with
+cabins and headlights, and police that close in when you brake or drift and
+fall back when you accelerate. Slower scrolling and stronger actions made the
+world learnable: the dream improved from 21.9/27.7/39.8 to **20.6/24.4/27.1**
+against a copy baseline of 18.8/21.2/21.0. Replacing the action now changes
+50-62% of the codes and 0.5-0.6 MAE of pixels — the action finally reaches the
+image. The model still does not beat a plain copy, and the decoded cars and
+sky are noisy at 64x64 after 4k steps.
+
+[`docs/racing-city.mp4`](../docs/racing-city.mp4) is the 10-second city clip.
 
 The reference's key next step is to **condition the renderer on the proxy** —
-the proxy fixes camera and motion while the model supplies appearance. That is
-the obvious next experiment here, along with more data and a larger model.
+the proxy fixes camera and motion while the model supplies appearance. Our
+world already records that proxy (`proxy.bin`), so it is ready for that
+experiment, along with more data and a larger model.
 
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
