@@ -258,3 +258,10 @@ later. The first VQVAE + transformer dream is in
 [`docs/racing-dream.mp4`](docs/racing-dream.mp4); the frame works; the city version adds turns,
 detailed cars and a reactive police chase but the model still does not beat a
 copy baseline. See [`docs/racing-city.mp4`](docs/racing-city.mp4).
+
+### Top-down city chase
+
+A rebuilt racing world with real left/right turns at intersections, varied
+buildings, sidewalks, lane markings and police that follow the same turns.
+Its VQVAE + transformer dream beats a copy baseline:
+[`docs/city-dream.mp4`](docs/city-dream.mp4).

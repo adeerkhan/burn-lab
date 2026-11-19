@@ -1115,6 +1115,31 @@ the proxy fixes camera and motion while the model supplies appearance. Our
 world already records that proxy (`proxy.bin`), so it is ready for that
 experiment, along with more data and a larger model.
 
+#### Top-down city with real turns
+
+The city was rebuilt as a proper grid: the car drives on roads and **turns left
+or right at intersections** instead of following a gently bending road. Each
+block has two or three buildings with varied colours, heights, shadows and
+windows, plus sidewalks and lane markings. The camera is zoomed to two pixels
+per cell so the blocks read as a city rather than a dense pattern. Police cars
+follow the player's recorded trail, so they take the same turns, and their
+lights flash.
+
+| Top-down city | Value |
+| --- | ---: |
+| VQVAE ceiling | 1.71 MAE |
+| One-step: model / copy | 31.39 / 30.91 |
+| 120-step dream | **37.10 / 39.53 / 41.41** |
+| 120-step copy | 38.75 / 43.37 / 42.50 |
+
+This is the **first pixel world that beats a copy baseline at every range**.
+Replacing the action changes 20-24% of codes and 0.8-1.2 MAE of pixels — the
+action finally has a visible effect. The decoded buildings are still noisy at
+64x64 after 4k steps, so this is a working base, not a finished city.
+
+[`docs/city-dream.mp4`](../docs/city-dream.mp4) shows the result. The proxy is
+recorded as before and remains the next step for conditioning.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer
