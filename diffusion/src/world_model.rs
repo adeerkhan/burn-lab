@@ -153,6 +153,7 @@ pub struct WorldModel {
     norm: LayerNorm,
     head: Linear,
     change_head: Linear,
+    pixel_head: Linear,
     change_prior: Param<Tensor<1>>,
     #[module(skip)]
     config: WorldConfig,
@@ -162,6 +163,8 @@ impl WorldModel {
     pub fn new(config: &WorldConfig, device: &Device) -> Self {
         let dim = config.dim;
         let codes = config.codes;
+        let grid = (config.tokens as f64).sqrt().round() as usize;
+        let patch = 64 / grid.max(1);
         let blocks = (0..config.layers)
             .map(|_| {
                 (
@@ -190,6 +193,10 @@ impl WorldModel {
             // unless it learns evidence to the contrary. This makes the copy
             // baseline the starting point rather than something to discover.
             change_head: LinearConfig::new(dim, 1).init(device),
+            // Predict a per-token patch residual in pixel space. This is the
+            // delta head: the code head predicts discrete ids, this head can
+            // correct low-level appearance that codes cannot carry.
+            pixel_head: LinearConfig::new(dim, 3 * patch * patch).init(device),
             change_prior: Param::from_tensor(Tensor::<1>::full([1], config.change_prior, device)),
             config: config.clone(),
         }
@@ -205,7 +212,7 @@ impl WorldModel {
         &self,
         seq: Tensor<3, Int>,
         actions: Tensor<2, Int>,
-    ) -> (Tensor<4>, Tensor<4>) {
+    ) -> (Tensor<4>, Tensor<4>, Tensor<5>) {
         let [batch, frames, tokens] = seq.dims();
         assert_eq!(tokens, self.config.tokens);
         let code_emb = self.code.forward(seq.reshape([batch * frames, tokens]));
@@ -270,10 +277,19 @@ impl WorldModel {
                 .reshape([batch, frames, tokens, self.config.codes]);
         let change = self
             .change_head
-            .forward(h)
+            .forward(h.clone())
             .add(self.change_prior.val().reshape([1, 1, 1]))
             .reshape([batch, frames, tokens, 1]);
-        (logits, change)
+        let grid = (self.config.tokens as f64).sqrt().round() as usize;
+        let patch = 64 / grid.max(1);
+        let pixel = self
+            .pixel_head
+            .forward(h)
+            .reshape([batch * frames, grid, grid, 3, patch, patch])
+            .permute([0, 3, 1, 4, 2, 5])
+            .reshape([batch, frames, 3, 64, 64])
+            .tanh();
+        (logits, change, pixel)
     }
 
     /// Absolute-code logits only, for the non-residual path and the shape test.
@@ -288,7 +304,7 @@ impl WorldModel {
         seq: &Tensor<3, Int>,
         actions: &Tensor<2, Int>,
         target: Option<&Tensor<2, Int>>,
-    ) -> (Tensor<2, Int>, Tensor<2>, Tensor<2>) {
+    ) -> (Tensor<2, Int>, Tensor<2>, Tensor<2>, Tensor<4>) {
         let device = seq.device();
         let [batch, frames, _] = seq.dims();
         let tokens = self.config.tokens;
@@ -333,7 +349,7 @@ impl WorldModel {
         );
         let actions_full =
             Tensor::<2, Int>::from_data(TensorData::new(acts, [batch, frames + 1]), &device);
-        let (logits, change_logits) = self.forward_full(full, actions_full);
+        let (logits, change_logits, pixel) = self.forward_full(full, actions_full);
         let target_logits = logits.narrow(1, frames, 1).reshape([batch * tokens, codes]);
         let probabilities = activation::softmax(target_logits.clone(), 1);
         let new_codes = target_logits.argmax(1).reshape([batch * tokens]);
@@ -352,17 +368,27 @@ impl WorldModel {
             new_codes.reshape([batch, tokens]),
             Tensor::<2>::from_data(TensorData::new(change_probs, [batch, tokens]), &device),
             confidence.reshape([batch, tokens]),
+            pixel.narrow(1, frames, 1).reshape([batch, 3, 64, 64]),
         )
     }
 
     /// Predict the next frame's codes and a per-token probability that each
     /// token changed relative to the last context frame.
+    pub fn predict_detail_pixels(
+        &self,
+        seq: Tensor<3, Int>,
+        actions: Tensor<2, Int>,
+    ) -> (Tensor<2, Int>, Tensor<2>, Tensor<4>) {
+        let (codes, probs, _, pixel) = self.predict_pass(&seq, &actions, None);
+        (codes, probs, pixel)
+    }
+
     pub fn predict_detail(
         &self,
         seq: Tensor<3, Int>,
         actions: Tensor<2, Int>,
     ) -> (Tensor<2, Int>, Tensor<2>) {
-        let (codes, probs, _) = self.predict_pass(&seq, &actions, None);
+        let (codes, probs, _) = self.predict_detail_pixels(seq, actions);
         (codes, probs)
     }
 
@@ -370,15 +396,16 @@ impl WorldModel {
     /// on each pass commit the most confident still-masked tokens and re-run.
     /// One pass reduces to plain argmax; more passes sharpen stochastic
     /// fireflies and beam edges without retraining.
-    pub fn predict_multipass(
+    pub fn predict_multipass_pixels(
         &self,
         seq: Tensor<3, Int>,
         actions: Tensor<2, Int>,
         passes: usize,
-    ) -> (Tensor<2, Int>, Tensor<2>) {
+    ) -> (Tensor<2, Int>, Tensor<2>, Tensor<4>) {
         let passes = passes.max(1);
         if passes == 1 {
-            return self.predict_detail(seq, actions);
+            let (codes, probs, pixel) = self.predict_detail_pixels(seq, actions);
+            return (codes, probs, pixel);
         }
         let device = seq.device();
         let batch = seq.dims()[0];
@@ -387,13 +414,15 @@ impl WorldModel {
         let mut target = vec![mask; batch * tokens];
         let mut codes = vec![0i64; batch * tokens];
         let mut change_probs = vec![0f32; batch * tokens];
+        let mut final_pixel: Option<Tensor<4>> = None;
         for pass in 1..=passes {
             let target_tensor = Tensor::<2, Int>::from_data(
                 TensorData::new(target.clone(), [batch, tokens]),
                 &device,
             );
-            let (new_codes, probs, confidence) =
+            let (new_codes, probs, confidence, pixel) =
                 self.predict_pass(&seq, &actions, Some(&target_tensor));
+            final_pixel = Some(pixel);
             codes = new_codes
                 .into_data()
                 .convert::<i64>()
@@ -437,6 +466,7 @@ impl WorldModel {
         (
             Tensor::<2, Int>::from_data(TensorData::new(codes, [batch, tokens]), &device),
             Tensor::<2>::from_data(TensorData::new(change_probs, [batch, tokens]), &device),
+            final_pixel.expect("at least one pass"),
         )
     }
 
@@ -476,9 +506,10 @@ mod tests {
             ..config
         };
         let model = WorldModel::new(&residual, &device);
-        let (logits, change) = model.forward_full(seq.clone(), actions.clone());
+        let (logits, change, pixel) = model.forward_full(seq.clone(), actions.clone());
         assert_eq!(logits.dims(), [2, 3, tokens, 16]);
         assert_eq!(change.dims(), [2, 3, tokens, 1]);
+        assert_eq!(pixel.dims(), [2, 3, 3, 64, 64]);
         assert_eq!(model.predict(seq, actions).dims(), [2, tokens]);
     }
 }

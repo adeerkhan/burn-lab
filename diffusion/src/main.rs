@@ -170,6 +170,8 @@ struct Options {
     contrastive: bool,
     contrastive_weight: f32,
     contrastive_margin: f32,
+    pixel_loss: f32,
+    pixel_scale: f32,
 }
 
 impl Default for Options {
@@ -224,6 +226,8 @@ impl Default for Options {
             contrastive: false,
             contrastive_weight: 0.5,
             contrastive_margin: 1.0,
+            pixel_loss: 0.0,
+            pixel_scale: 0.0,
         }
     }
 }
@@ -301,6 +305,8 @@ impl Options {
                 "--contrastive-margin" => {
                     options.contrastive_margin = value().parse().expect("contrastive margin")
                 }
+                "--pixel-loss" => options.pixel_loss = value().parse().expect("pixel loss"),
+                "--pixel-scale" => options.pixel_scale = value().parse().expect("pixel scale"),
                 "--world-noise" => options.world_noise = value().parse().expect("world noise"),
                 "--clean-p" => options.clean_p = value().parse().expect("clean probability"),
                 "--attention" => {
@@ -784,24 +790,25 @@ fn train_world_model(options: &Options) {
     let mut contrastive_rng = diffusion::data::Rng::new(options.seed ^ 0x9e37_79b9);
     let started = std::time::Instant::now();
     for step in 1..=options.steps {
-        let (seq, actions, targets, copy_source, weights) = world_batch(
-            WorldBatchArgs {
-                mask: config.codes as i64,
-                tokens_path: &token_path,
-                actions_path: &format!("{prefix}/actions.bin"),
-                total,
-                batch: options.batch,
-                context: config.context,
-                seed: options.seed + step as u64,
-                noise: options.world_noise,
-                clean_p: options.clean_p,
-                tokens: config.tokens,
-                grid: tokenizer_config.grid,
-                frames_path: &format!("{prefix}/frames.bin"),
-            },
-            &device,
-        );
-        let (logits, change_logits) = model.forward_full(seq.clone(), actions.clone());
+        let (seq, actions, targets, copy_source, weights, target_pixels, previous_pixels) =
+            world_batch(
+                WorldBatchArgs {
+                    mask: config.codes as i64,
+                    tokens_path: &token_path,
+                    actions_path: &format!("{prefix}/actions.bin"),
+                    total,
+                    batch: options.batch,
+                    context: config.context,
+                    seed: options.seed + step as u64,
+                    noise: options.world_noise,
+                    clean_p: options.clean_p,
+                    tokens: config.tokens,
+                    grid: tokenizer_config.grid,
+                    frames_path: &format!("{prefix}/frames.bin"),
+                },
+                &device,
+            );
+        let (logits, change_logits, pixel) = model.forward_full(seq.clone(), actions.clone());
         let [batch, frames, tokens, codes] = logits.dims();
         let flat = logits.reshape([batch * frames * tokens, codes]);
         let target = targets.reshape([batch * frames * tokens]);
@@ -857,6 +864,15 @@ fn train_world_model(options: &Options) {
                 .div(weights.mean().clamp_min(1e-6))
         };
         let mut loss = loss;
+        if options.pixel_loss > 0.0 {
+            let residual = target_pixels.sub(previous_pixels);
+            let pixel_loss = pixel
+                .sub(residual)
+                .abs()
+                .mean()
+                .mul_scalar(options.pixel_loss);
+            loss = loss.add(pixel_loss);
+        }
         if options.contrastive {
             // The wrong action must predict the target worse than the true
             // action: relu(margin - (ce_alt - ce_true)). This is what stops
@@ -878,7 +894,7 @@ fn train_world_model(options: &Options) {
             }
             let alt_actions =
                 Tensor::<2, Int>::from_data(TensorData::new(acts, [batch, frames]), &device);
-            let (alt_logits, _) = model.forward_full(seq, alt_actions);
+            let (alt_logits, _, _) = model.forward_full(seq, alt_actions);
             let alt_ce = burn::tensor::activation::log_softmax(
                 alt_logits.reshape([batch * frames * tokens, codes]),
                 1,
@@ -998,7 +1014,7 @@ fn world_ceiling(options: &Options) {
             &device,
         );
         let acts = Tensor::<2, Int>::from_data(TensorData::new(acts, [1, context]), &device);
-        let (new_ids, probs) = wm.predict_multipass(seq, acts, options.passes);
+        let (new_ids, probs, pixel) = wm.predict_multipass_pixels(seq, acts, options.passes);
         let real = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
         let previous = world_frame_at(&format!("{prefix}/frames.bin"), episode, time - 1, &device);
         let dream = decode_world_prediction(
@@ -1006,6 +1022,8 @@ fn world_ceiling(options: &Options) {
             &wm,
             ResidualDecode {
                 tokens,
+                pixel,
+                pixel_scale: options.pixel_scale,
                 copy_ids: ids.last().unwrap().clone(),
                 new_ids,
                 probs,
@@ -1041,6 +1059,8 @@ fn world_ceiling(options: &Options) {
 /// copy; anchoring on the real pixels can.
 struct ResidualDecode<'a> {
     tokens: usize,
+    pixel: Tensor<4>,
+    pixel_scale: f32,
     copy_ids: Tensor<1, Int>,
     new_ids: Tensor<2, Int>,
     probs: Tensor<2>,
@@ -1080,8 +1100,12 @@ fn decode_world_prediction(vq: &VqVae, wm: &WorldModel, args: ResidualDecode<'_>
     // change probability should stay closed (the cave must not drift), while
     // an entity token with real evidence should open fully.
     let mask = mask.mul_scalar(args.gate_boost).clamp(0.0, 1.0);
-    args.anchor
-        .add(delta.mul(mask).mul_scalar(args.delta_scale))
+    let base = if args.pixel_scale != 0.0 {
+        args.anchor.add(args.pixel.mul_scalar(args.pixel_scale))
+    } else {
+        args.anchor
+    };
+    base.add(delta.mul(mask).mul_scalar(args.delta_scale))
         .clamp(-1.0, 1.0)
 }
 
@@ -1165,12 +1189,14 @@ fn dream_rollout(options: &Options) {
             TensorData::new(actions.clone(), [1, actions.len()]),
             &device,
         );
-        let (new_ids, probs) = wm.predict_multipass(seq, acts, options.passes);
+        let (new_ids, probs, pixel) = wm.predict_multipass_pixels(seq, acts, options.passes);
         let dream = decode_world_prediction(
             &vq,
             &wm,
             ResidualDecode {
                 tokens,
+                pixel,
+                pixel_scale: options.pixel_scale,
                 copy_ids: history.last().unwrap().clone(),
                 new_ids: new_ids.clone(),
                 probs,
@@ -1315,19 +1341,21 @@ fn world_action(options: &Options) {
         let true_action = acts[context - 1] as usize;
         let previous = world_frame_at(&format!("{prefix}/frames.bin"), episode, time - 1, &device);
         let real = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
-        let predict = |acts: &[i64]| -> (Tensor<2, Int>, Tensor<2>) {
+        let predict = |acts: &[i64]| -> (Tensor<2, Int>, Tensor<2>, Tensor<4>) {
             let tensor = Tensor::<2, Int>::from_data(
                 TensorData::new(acts.to_vec(), [1, acts.len()]),
                 &device,
             );
-            wm.predict_multipass(seq.clone(), tensor, options.passes)
+            wm.predict_multipass_pixels(seq.clone(), tensor, options.passes)
         };
-        let (true_ids, true_probs) = predict(&acts);
+        let (true_ids, true_probs, true_pixel) = predict(&acts);
         let dream_true = decode_world_prediction(
             &vq,
             &wm,
             ResidualDecode {
                 tokens,
+                pixel: true_pixel,
+                pixel_scale: options.pixel_scale,
                 copy_ids: ids.last().unwrap().clone(),
                 new_ids: true_ids.clone(),
                 probs: true_probs,
@@ -1349,12 +1377,14 @@ fn world_action(options: &Options) {
             }
             let mut other = acts.clone();
             other[context - 1] = alternative as i64;
-            let (alt_ids, alt_probs) = predict(&other);
+            let (alt_ids, alt_probs, alt_pixel) = predict(&other);
             let dream_alt = decode_world_prediction(
                 &vq,
                 &wm,
                 ResidualDecode {
                     tokens,
+                    pixel: alt_pixel,
+                    pixel_scale: options.pixel_scale,
                     copy_ids: ids.last().unwrap().clone(),
                     new_ids: alt_ids.clone(),
                     probs: alt_probs,
@@ -1529,12 +1559,16 @@ fn play_predict(args: PlayPredict<'_>, action: i64) -> Tensor<4> {
         TensorData::new(actions.clone(), [1, actions.len()]),
         args.device,
     );
-    let (new_ids, probs) = args.wm.predict_multipass(seq, acts, args.options.passes);
+    let (new_ids, probs, pixel) = args
+        .wm
+        .predict_multipass_pixels(seq, acts, args.options.passes);
     decode_world_prediction(
         args.vq,
         args.wm,
         ResidualDecode {
             tokens: args.wm.config().tokens,
+            pixel,
+            pixel_scale: args.options.pixel_scale,
             copy_ids: args.history.last().unwrap().clone(),
             new_ids,
             probs,
@@ -1691,16 +1725,17 @@ struct WorldBatchArgs<'a> {
     frames_path: &'a str,
 }
 
-fn world_batch(
-    args: WorldBatchArgs<'_>,
-    device: &Device,
-) -> (
+type WorldBatch = (
     Tensor<3, Int>,
     Tensor<2, Int>,
     Tensor<3, Int>,
     Tensor<3, Int>,
     Tensor<3>,
-) {
+    Tensor<5>,
+    Tensor<5>,
+);
+
+fn world_batch(args: WorldBatchArgs<'_>, device: &Device) -> WorldBatch {
     use std::io::{Read, Seek, SeekFrom};
     let mut tokens_file = std::fs::File::open(args.tokens_path).expect("open tokens");
     let mut actions_file = std::fs::File::open(args.actions_path).expect("open actions");
@@ -1712,6 +1747,8 @@ fn world_batch(
     let mut targets = Vec::with_capacity(args.batch * frames * tokens);
     let mut copy = Vec::with_capacity(args.batch * frames * tokens);
     let mut weights = Vec::with_capacity(args.batch * frames * tokens);
+    let mut target_pixels = Vec::with_capacity(args.batch * frames * 3 * 64 * 64);
+    let mut previous_pixels = Vec::with_capacity(args.batch * frames * 3 * 64 * 64);
     let mut frames_file = std::fs::File::open(args.frames_path).expect("open frames");
 
     for _ in 0..args.batch {
@@ -1730,6 +1767,20 @@ fn world_batch(
                 .seek(SeekFrom::Start((index * 3 * 64 * 64) as u64))
                 .expect("seek frame");
             frames_file.read_exact(&mut frame).expect("read frame");
+            let mut prev_raw = vec![0u8; 3 * 64 * 64];
+            let prev_index = index.saturating_sub(1);
+            frames_file
+                .seek(SeekFrom::Start((prev_index * 3 * 64 * 64) as u64))
+                .expect("seek previous frame");
+            frames_file
+                .read_exact(&mut prev_raw)
+                .expect("read previous frame");
+            for channel in 0..3 {
+                for pixel in 0..64 * 64 {
+                    target_pixels.push(frame[3 * pixel + channel] as f32 / 127.5 - 1.0);
+                    previous_pixels.push(prev_raw[3 * pixel + channel] as f32 / 127.5 - 1.0);
+                }
+            }
             let patch = (64 / args.grid).max(1);
             for ty in 0..args.grid {
                 for tx in 0..args.grid {
@@ -1818,6 +1869,14 @@ fn world_batch(
         Tensor::<3, Int>::from_data(TensorData::new(copy, [args.batch, frames, tokens]), device),
         Tensor::<3>::from_data(
             TensorData::new(weights, [args.batch, frames, tokens]),
+            device,
+        ),
+        Tensor::<5>::from_data(
+            TensorData::new(target_pixels, [args.batch, frames, 3, 64, 64]),
+            device,
+        ),
+        Tensor::<5>::from_data(
+            TensorData::new(previous_pixels, [args.batch, frames, 3, 64, 64]),
             device,
         ),
     )
