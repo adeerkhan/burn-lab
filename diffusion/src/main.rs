@@ -413,6 +413,7 @@ fn main() {
         "world-encode" => encode_world_tokens(&options),
         "world-dream" => dream_rollout(&options),
         "world-ceiling" => world_ceiling(&options),
+        "world-action" => world_action(&options),
         "world-play" => world_play(&options),
         "world-detail" => train_detail(&options),
         "make-pairs" => make_pairs(&options),
@@ -1168,6 +1169,172 @@ fn dream_rollout(options: &Options) {
     };
     let (early, mid, late) = (mean(0..10), mean(10..30), mean(30..errors.len()));
     println!("dream MAE (0-255): steps 1-10 {early:.2}, 11-30 {mid:.2}, 31+ {late:.2}");
+    leave_after_writing();
+}
+
+/// Measure whether the action actually changes the prediction. For each real
+/// context, decode the next frame with the true action and with every other
+/// action; report the pixel divergence and the fraction of changed codes.
+fn world_action(options: &Options) {
+    let device = options.device();
+    let prefix = if options.data.is_empty() {
+        "/home/adeerkhan/tmp/world/data".to_string()
+    } else {
+        options.data.clone()
+    };
+    let checkpoints = if options.checkpoint.is_empty() {
+        "/home/adeerkhan/tmp/world/wm".to_string()
+    } else {
+        options.checkpoint.clone()
+    };
+    let vq_dir = if options.eval_data.is_empty() {
+        "/home/adeerkhan/tmp/world/vq".to_string()
+    } else {
+        options.eval_data.clone()
+    };
+    let wm_config: WorldConfig = serde_json::from_str(
+        &std::fs::read_to_string(format!("{checkpoints}/config.json")).expect("read world config"),
+    )
+    .expect("parse world config");
+    let vq_config: VqConfig = serde_json::from_str(
+        &std::fs::read_to_string(format!("{vq_dir}/config.json")).expect("read vq config"),
+    )
+    .expect("parse vq config");
+    let mut vq = VqVae::new(&vq_config, &device);
+    vq = vq.load_record(ModuleRecord::load(format!("{vq_dir}/model")).expect("load VQVAE"));
+    let mut wm = WorldModel::new(&wm_config, &device);
+    wm = wm.load_record(
+        ModuleRecord::load(format!("{checkpoints}/model"))
+            .expect("load world model")
+            .allow_partial(true),
+    );
+    let recorded = std::fs::read(format!("{prefix}/actions.bin")).expect("read actions");
+    let episodes = (recorded.len() / 128).max(1);
+    let context = wm_config.context;
+    let tokens = wm_config.tokens;
+    let samples = options.steps.max(1);
+    let names = ["stay", "up", "down", "left", "right"];
+    let mut sensitivity = [0.0f32; 5];
+    let mut changed = [0.0f32; 5];
+    let mut counts = [0.0f32; 5];
+    let mut true_error = 0.0f32;
+    let mae = |a: &Tensor<4>, b: &Tensor<4>| -> f32 {
+        a.clone().sub(b.clone()).abs().mean().into_scalar::<f32>() * 127.5
+    };
+
+    for index in 0..samples {
+        let episode = index % episodes;
+        let time = context + (index * 7) % (128 - context);
+        let mut ids = Vec::new();
+        for slot in 0..context {
+            let frame = world_frame_at(
+                &format!("{prefix}/frames.bin"),
+                episode,
+                time - context + slot,
+                &device,
+            );
+            ids.push(vq.ids(vq.encode(frame)).reshape([tokens]));
+        }
+        let seq = Tensor::<3, Int>::from_data(
+            TensorData::new(
+                ids.iter()
+                    .flat_map(|id| {
+                        id.clone()
+                            .into_data()
+                            .convert::<i64>()
+                            .try_to_vec::<i64>()
+                            .unwrap()
+                    })
+                    .collect::<Vec<_>>(),
+                [1, context, tokens],
+            ),
+            &device,
+        );
+        let mut acts = Vec::new();
+        for slot in 1..=context {
+            acts.push(recorded[episode * 128 + time - context + slot - 1] as i64);
+        }
+        let true_action = acts[context - 1] as usize;
+        let previous = world_frame_at(&format!("{prefix}/frames.bin"), episode, time - 1, &device);
+        let real = world_frame_at(&format!("{prefix}/frames.bin"), episode, time, &device);
+        let predict = |acts: &[i64]| -> (Tensor<2, Int>, Tensor<2>) {
+            let tensor = Tensor::<2, Int>::from_data(
+                TensorData::new(acts.to_vec(), [1, acts.len()]),
+                &device,
+            );
+            wm.predict_multipass(seq.clone(), tensor, options.passes)
+        };
+        let (true_ids, true_probs) = predict(&acts);
+        let dream_true = decode_world_prediction(
+            &vq,
+            &wm,
+            ResidualDecode {
+                tokens,
+                copy_ids: ids.last().unwrap().clone(),
+                new_ids: true_ids.clone(),
+                probs: true_probs,
+                anchor: previous.clone(),
+                delta_scale: options.delta_scale,
+                gate_boost: options.gate_boost,
+                device: &device,
+            },
+        );
+        true_error += mae(&dream_true, &real);
+        let true_values = true_ids
+            .into_data()
+            .convert::<i64>()
+            .try_to_vec::<i64>()
+            .unwrap();
+        for alternative in 0..5 {
+            if alternative == true_action {
+                continue;
+            }
+            let mut other = acts.clone();
+            other[context - 1] = alternative as i64;
+            let (alt_ids, alt_probs) = predict(&other);
+            let dream_alt = decode_world_prediction(
+                &vq,
+                &wm,
+                ResidualDecode {
+                    tokens,
+                    copy_ids: ids.last().unwrap().clone(),
+                    new_ids: alt_ids.clone(),
+                    probs: alt_probs,
+                    anchor: previous.clone(),
+                    delta_scale: options.delta_scale,
+                    gate_boost: options.gate_boost,
+                    device: &device,
+                },
+            );
+            let alt_values = alt_ids
+                .into_data()
+                .convert::<i64>()
+                .try_to_vec::<i64>()
+                .unwrap();
+            let different = true_values
+                .iter()
+                .zip(alt_values.iter())
+                .filter(|(a, b)| a != b)
+                .count() as f32
+                / tokens as f32;
+            sensitivity[alternative] += mae(&dream_true, &dream_alt);
+            changed[alternative] += different;
+            counts[alternative] += 1.0;
+        }
+    }
+    let n = samples as f32;
+    println!("true-action one-step MAE (0-255): {:.2}", true_error / n);
+    for action in 0..5 {
+        if counts[action] == 0.0 {
+            continue;
+        }
+        println!(
+            "  replace with {:<6}  pixel divergence {:5.2}  codes changed {:5.2}%",
+            names[action],
+            sensitivity[action] / counts[action],
+            100.0 * changed[action] / counts[action]
+        );
+    }
     leave_after_writing();
 }
 
