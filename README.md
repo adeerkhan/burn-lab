@@ -302,3 +302,9 @@ Larger VQVAE (K=1024, D=96, 24k steps) and a hybrid clip with exact cars:
 Doubled frame resolution, same-size cars, VICE CITY neon and a longer run;
 dream MAE improved to 25.6 / 30.0 / 29.0:
 [`docs/vice-city-128.mp4`](docs/vice-city-128.mp4).
+
+### Ocean Drive
+
+Miami-style chase: sea and beach on the left, palms on the beach, buildings on
+the right and a clean sunset. Clip:
+[`docs/ocean-drive.mp4`](docs/ocean-drive.mp4).

@@ -11,6 +11,7 @@ and a wireframe proxy of the same structure.
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -114,24 +115,64 @@ class ViceWorld:
 
     def road_half(self, y: int) -> float:
         t = min(1.0, max(0.0, (y - HORIZON) / max(1, SIZE - HORIZON)))
-        return 2.0 + t * 31.0
+        return 2.0 + t * 18.0
 
-    def _sky(self, draw, proxy: bool) -> None:
+    def _sky_gradient(self, draw, proxy: bool) -> None:
         if proxy:
             draw.rectangle((0, 0, SIZE - 1, SIZE - 1), fill=(0, 0, 0))
             return
         for y in range(HORIZON):
             t = y / max(1, HORIZON)
-            draw.line([(0, y), (SIZE, y)], fill=(int(255 - 30 * t), int(150 + 60 * t), int(95 + 55 * t)))
-        # Low sun at the end of the boulevard.
-        sun_x = int(self._vanish())
-        for radius, colour in ((7, (255, 170, 90)), (5, (255, 205, 120)), (3, (255, 240, 190))):
-            draw.ellipse((sun_x - radius, HORIZON - radius, sun_x + radius, HORIZON + radius),
-                         fill=colour)
-        for i in range(14):
-            x = i * 5
-            height = 2 + (i * 7 + self.seed) % 8
-            draw.rectangle((x, HORIZON - height, x + 4, HORIZON), fill=(140, 110, 105))
+            draw.rectangle((0, y, SIZE, y + 1), fill=(int(252 - 22 * t), int(150 + 70 * t), int(105 + 70 * t)))
+
+    def _sun(self, draw, proxy: bool) -> None:
+        if proxy:
+            return
+        cx, cy = self._vanish(), HORIZON + 1
+        # Soft rays, no dark outlines.
+        for index in range(12):
+            angle = index * math.pi / 6.0 + 0.06 * math.sin(self.time * 0.05)
+            if abs(math.sin(angle)) < 0.25:
+                continue
+            length = 7 + (index % 3) * 2
+            x1 = cx + math.cos(angle) * length
+            y1 = cy + math.sin(angle) * length * 0.6
+            colour = (255, 215, 165) if index % 2 else (255, 235, 190)
+            draw.line([(cx, cy), (x1, y1)], fill=colour, width=1)
+        for radius, colour in ((7, (255, 190, 110)), (4, (255, 225, 150)), (2, (255, 248, 215))):
+            draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=colour)
+
+    def _sea(self, draw, proxy: bool) -> None:
+        if proxy:
+            return
+        top_edge = max(4, int(self.road_centre(HORIZON) - self.road_half(HORIZON) - 4))
+        bottom_edge = max(4, int(self.road_centre(SIZE) - self.road_half(SIZE) - 4))
+        draw.polygon([(0, HORIZON), (top_edge, HORIZON),
+                      (bottom_edge, SIZE), (0, SIZE)], fill=(45, 115, 165))
+        # A few sparse glints on the water, moving with the car.
+        for wave in range(10):
+            y = HORIZON + 2 + wave * 5
+            if y >= SIZE:
+                break
+            edge = int(self.road_centre(y) - self.road_half(y) - 4)
+            span = max(4, edge // 2)
+            offset = (wave * 3 + int(self.distance * 0.4)) % span
+            x0 = offset + 1
+            if x0 + 3 < edge:
+                draw.line([(x0, y), (x0 + 3, y)], fill=(180, 220, 240), width=1)
+        # Foam along the shoreline.
+        draw.line([(top_edge, HORIZON), (bottom_edge, SIZE)], fill=(240, 242, 225), width=1)
+
+    def _beach(self, draw, proxy: bool) -> None:
+        if proxy:
+            return
+        for y in range(HORIZON + 1, SIZE):
+            t = min(1.0, max(0.0, (y - HORIZON) / max(1, SIZE - HORIZON)))
+            c, half = self.road_centre(y), self.road_half(y)
+            left = int(c - half - 4)
+            right = int(c - half - 2)
+            if left < right and right > 0:
+                draw.rectangle((max(0, left), y, right, y), fill=(int(215 - 30 * t), int(195 - 30 * t), int(145 - 25 * t)))
 
     def _road(self, draw, proxy: bool) -> None:
         ct, cb = self.road_centre(HORIZON), self.road_centre(SIZE)
@@ -155,9 +196,9 @@ class ViceWorld:
                           fill=(210, 208, 195) if proxy else LANE, width=1)
 
     def _buildings(self, draw, proxy: bool) -> None:
-        for side in (-1, 1):
-            for i in range(8):
-                phase = (i + (self.distance * 0.1) % 1.0) / 8.0
+        for side in (1,):
+            for i in range(9):
+                phase = (i + (self.distance * 0.1) % 1.0) / 9.0
                 depth = phase ** 1.5
                 y0 = int(HORIZON + depth * (SIZE - HORIZON))
                 c = self.road_centre(y0)
@@ -191,27 +232,29 @@ class ViceWorld:
                     if seed % 4 == 0 and depth > 0.2:
                         neon = NEON[(i + self.seed) % len(NEON)]
                         ny = top + 4 + (seed % 3) * 6
-                        if ny + 4 < box[3] and box[2] - box[0] > 9:
-                            draw.rectangle((box[0] + 1, ny, box[2] - 1, ny + 4), fill=(35, 25, 45))
-                            draw.text((box[0] + 2, ny), "VICE CITY", fill=neon)
+                        if ny + 4 < box[3] and box[2] - box[0] > 7:
+                            draw.rectangle((box[0] + 1, ny, box[2] - 1, ny + 4), fill=(40, 30, 50))
+                            draw.rectangle((box[0] + 2, ny + 1, box[2] - 2, ny + 2), fill=neon)
                     if depth > 0.5 and seed % 3 == 0:
                         draw.line([(box[0] + 2, top), (box[0] + 2, top - 3)], fill=(60, 60, 65))
 
     def _palms(self, draw, proxy: bool) -> None:
-        for side in (-1, 1):
-            for i in range(6):
-                phase = (i + (self.distance * 0.1) % 1.0) / 6.0
-                depth = float(phase) ** 1.5
-                y = int(HORIZON + 2 + depth * (SIZE - HORIZON))
-                c = self.road_centre(y)
-                half = self.road_half(y)
-                x = int(c + side * (half + 1.5))
-                height = int(2 + depth * 9)
-                colour = (220, 220, 220) if proxy else (95, 75, 60)
-                draw.line([(x, y), (x, y - height)], fill=colour, width=max(1, int(1 + depth)))
-                leaf = (220, 220, 220) if proxy else (45, 130, 80)
-                spread = max(2, int(2 + depth * 5))
-                draw.line([(x - spread, y - height), (x, y - height - 2), (x + spread, y - height)],
+        # Palms grow only along the beach, to the left of the road.
+        for i in range(6):
+            phase = (i + (self.distance * 0.1) % 1.0) / 6.0
+            depth = float(phase) ** 1.5
+            y = int(HORIZON + 2 + depth * (SIZE - HORIZON))
+            c, half = self.road_centre(y), self.road_half(y)
+            x = int(c - half - 5)
+            height = int(3 + depth * 10)
+            trunk = (220, 220, 220) if proxy else (130, 100, 72)
+            top_x = x + int(depth * 2)
+            draw.line([(x, y), (top_x, y - height)], fill=trunk, width=max(1, int(1 + depth)))
+            leaf = (220, 220, 220) if proxy else (55, 150, 90)
+            spread = max(2, int(2 + depth * 5))
+            for dx in (-spread, -spread // 2, 0, spread // 2, spread):
+                drop = max(1, int(depth * 2)) if abs(dx) < spread else 0
+                draw.line([(top_x, y - height), (top_x + dx, y - height - 1 + drop)],
                           fill=leaf, width=1)
 
     def _car(self, draw, x: float, y: int, width: int, height: int,
@@ -253,9 +296,12 @@ class ViceWorld:
     def render(self, proxy: bool = False) -> np.ndarray:
         image = Image.new("RGB", (OUT, OUT))
         draw = ScaledDraw(image)
-        self._sky(draw, proxy)
+        self._sky_gradient(draw, proxy)
+        self._sea(draw, proxy)
+        self._beach(draw, proxy)
         self._road(draw, proxy)
         self._buildings(draw, proxy)
+        self._sun(draw, proxy)
         self._palms(draw, proxy)
         self._police(draw, proxy)
         self._player(draw, proxy)

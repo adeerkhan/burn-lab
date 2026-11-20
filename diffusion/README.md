@@ -1270,6 +1270,20 @@ decoded cars are still soft, so `vice_hybrid.py` remains useful for exact cars.
 The VQ library suggests cosine similarity, lower-dimensional codebooks and
 residual quantization for better code usage; those are the next tokenizer ideas.
 
+#### Ocean Drive
+
+The boulevard was rebuilt as a Miami scene: the **sea and a sandy beach on the
+left**, palm trees only along the beach, buildings only on the right, and a
+clean low sun with soft rays at the end of the road. The repeated VICE CITY
+neon text was removed; neon is now just coloured strips. The sea has sparse
+moving glints and a foam line at the shore.
+
+Trained on 400 episodes at 128x128, reusing the K=1024 VQVAE and a 12k-step
+transformer. Dream MAE: 20.89 / 34.20 / 32.46.
+
+[`docs/ocean-drive.mp4`](../docs/ocean-drive.mp4) is the clip. The sea, beach,
+palms, sun and right-side towers are all visible in the decoded frames.
+
 The reference publishes no MAE/PSNR table — only a showcase image and dream
 videos — so there is no honest head-to-head score. Qualitatively its dream is
 much crisper and stays coherent far longer, but it also had a far longer
